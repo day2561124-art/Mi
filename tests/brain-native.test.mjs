@@ -138,3 +138,33 @@ test('native history refuses time rewind under same world ID', async () => {
     await assert.rejects(b.decide(request(w)), { code: 'NATIVE_WORLD_TIME_REWIND' });
   } finally { await rm(folder, { recursive: true, force: true }); }
 });
+
+test('Native feedback is idempotent, scope checked, and appears as unverified actor-only evidence on next turn',async()=>{
+ const folder=await mkdtemp(join(tmpdir(),'mi-native-feedback-'));
+ try{
+  const upstream=mockNative(),indexFile=join(folder,'index.json');
+  const bridge=createNativeBrainBridge({upstream,decider:async packet=>({action_id:'wait'}),indexFile});
+  const w=makeWorld('回饋');
+  const first=await bridge.decide(request(w));
+  assert.match(first.decision_id,/^[a-f0-9]{64}$/);
+  const payload={world_id:w.id,actor_id:'conan',decision_id:first.decision_id,action_id:'wait',kind:'observed',world_minute:30,place_id:'apartment'};
+  await assert.rejects(bridge.acknowledge({...payload,kind:'arrived'}),{code:'BRAIN_FEEDBACK_INVALID'});
+  await assert.rejects(bridge.acknowledge({...payload,place_id:'school'}),{code:'BRAIN_FEEDBACK_INVALID'});
+  await assert.rejects(bridge.acknowledge({...payload,actor_id:'kaito'}),{code:'BRAIN_FEEDBACK_INVALID'});
+  const accepted=await bridge.acknowledge(payload);
+  assert.equal(accepted.accepted,true);assert.equal(accepted.duplicate,false);
+  assert.equal((await bridge.acknowledge(payload)).duplicate,true);
+  await assert.rejects(bridge.acknowledge({...payload,world_minute:60}),{code:'BRAIN_FEEDBACK_CONFLICT'});
+  const restarted=createNativeBrainBridge({upstream,decider:async()=>({action_id:'wait'}),indexFile});
+  w.minutes=60;
+  const second=await restarted.decide(request(w));
+  assert.equal(second.committed,true);
+  const record=JSON.parse(await readFile(indexFile,'utf8')).worlds[w.id];
+  assert.equal(record.feedback[0].delivered_in?.startsWith('mi_evt_'),true);
+  const state=await upstream.getWorldSimulationState(record.session_id);
+  const char=state.state.characters['江戶川柯南 (conan)'];
+  assert.ok(char.guessed.some(x=>x.includes('本機存檔回報（未經伺服器驗證）')));
+  assert.ok(!JSON.stringify(state.state.memories).includes('本機存檔回報'));
+  assert.equal((await restarted.acknowledge(payload)).duplicate,true);
+ }finally{await rm(folder,{recursive:true,force:true});}
+});

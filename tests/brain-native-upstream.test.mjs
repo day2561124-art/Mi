@@ -1,7 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdtemp, rm } from 'node:fs/promises';
-import { tmpdir } from 'node:os';
+import { mkdtemp, mkdir, rm } from 'node:fs/promises';
 import { join } from 'node:path';
 import { makeWorld } from '../src/core/world.js';
 import { makeBoundedBrainRequest } from '../src/core/brain-bridge.js';
@@ -9,7 +8,10 @@ import { loadNativeRuntime, createNativeBrainBridge } from '../server/native-bra
 
 test('pinned wRITE Native Loop executes two committed turns with durable experience lineage', async t => {
   if (!process.env.WRITE_ROOT) return t.skip('wRITE checkout absent; GitHub upstream CI runs this test');
-  const root = await mkdtemp(join(tmpdir(), 'mi-native-upstream-'));
+  // wRITE only admits fixture roots beneath its own checked-out project.
+  const parent = join(process.env.WRITE_ROOT, 'tests', '.tmp');
+  await mkdir(parent, { recursive: true });
+  const root = await mkdtemp(join(parent, 'mi-native-upstream-'));
   try {
     const runtime = await loadNativeRuntime(process.env.WRITE_ROOT);
     const world = makeWorld('上游原生回合');

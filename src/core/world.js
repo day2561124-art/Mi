@@ -1,6 +1,7 @@
 import {CAST,PLACE_BY_ID} from '../data/atlas.js';
 import {CANON_BEATS,CANON_ARCS} from '../data/canon.js';
 import {findRoute} from './routes.js';
+import {settleBrainOutcomes} from './brain-feedback.js';
 export const SCHEMA_VERSION=2;
 const DAY=1440,MAX_LOG=400,MAX_SIGNALS=120,MAX_OFFLINE_MINUTES=7*DAY;
 export function worldClock(minutes){
@@ -79,6 +80,7 @@ function investigate(world,actor,lead){
   actor.activity='現場查核未取得足夠證據';
   appendLog(world,'investigation',`${actor.name}走訪${PLACE_BY_ID[placeId].name}，但現場沒有足夠證據支持先前的消息，暫時保留疑問。`,placeId,[actor.id]);
  }
+ if(world.logs.at(-1)?.kind==='investigation')world.logs.at(-1).signalId=signalId;
  actor.facts=actor.facts.filter(f=>f!==lead);
  actor.intent=null;return true;
 }
@@ -115,7 +117,8 @@ function progressActor(world,actor,tick){
  // Perception precedes investigation. One actor cannot read global event state
  // unless physically present or a nearby character passes on a rumor.
  if(noticeScene(world,actor))return;
- const lead=pendingLead(actor);
+ const directed=actor.intent?.type==='investigate'&&actor.intent.signalId?`lead:${actor.intent.placeId}:${actor.intent.signalId}`:null;
+ const lead=directed&&actor.facts.includes(directed)?directed:pendingLead(actor);
  if(lead&&lead.slice(5).split(':')[0]===actor.placeId&&actor.curiosity>=65){investigate(world,actor,lead);return;}
  actor.energy=Math.max(0,actor.energy-2);actor.social=Math.max(0,actor.social-1);
  const others=world.people.filter(p=>p.id!==actor.id&&p.placeId===actor.placeId&&!p.targetId);
@@ -147,8 +150,9 @@ export function advanceWorld(snapshot,deltaMinutes){
  for(let minute=world.minutes+1;minute<=endpoint;minute++){
   world.minutes=minute;
   if(world.canonEnabled){for(const beat of CANON_BEATS){if(beat.atMinute===minute)applyCanon(world,beat);}}
-  if(minute%30===0){const tick=minute/30;for(const actor of world.people)progressActor(world,actor,tick);}
+  if(minute%30===0){const tick=minute/30;for(const actor of world.people)progressActor(world,actor,tick);settleBrainOutcomes(world);}
  }
+ settleBrainOutcomes(world);
  if(desired>MAX_OFFLINE_MINUTES)appendLog(world,'system','離線時間超過七天；已先補算七個遊戲日，避免無限制推進。');
  return world;
 }
@@ -195,7 +199,7 @@ export function upgradeWorld(snapshot){
   value.schemaVersion=2;value.observer=observerStart();value.signals=[];value.nextLogSeq=value.logs.length;
   for(const p of value.people){p.route=[];p.travel=null;p.intent=null;p.facts ||= [];p.relationships ||= {};}
  }
- validateWorld(value);return value;
+ value.brainOutcomes ||= [];validateWorld(value);return value;
 }
 export function validateWorld(value){
  if(value?.schemaVersion!==SCHEMA_VERSION)throw new Error('存檔結構不相容或已損壞。');
@@ -205,6 +209,7 @@ export function validateWorld(value){
   if(!Array.isArray(actor.facts)||actor.facts.length>100||!Array.isArray(actor.route)||!Number.isFinite(actor.energy)||actor.energy<0||actor.energy>100||!Number.isFinite(actor.social)||actor.social<0||actor.social>100||actor.targetId&&!PLACE_BY_ID[actor.targetId])throw new Error('人物狀態或行動資料有誤。');
   for(const leg of actor.route){if(!PLACE_BY_ID[leg.from]||!PLACE_BY_ID[leg.to]||!Number.isFinite(leg.minutes)||leg.minutes<=0)throw new Error('存檔移動路線錯誤。');}
  }
+ if(value.brainOutcomes!==undefined){if(!Array.isArray(value.brainOutcomes)||value.brainOutcomes.length>48)throw new Error('角色回饋紀錄過大。');for(const item of value.brainOutcomes){if(!item||!['pending','ready','delivered'].includes(item.state)||typeof item.decisionId!=='string'||!/^[a-f0-9]{32,64}$/.test(item.decisionId)||typeof item.actorId!=='string'||!value.people.some(p=>p.id===item.actorId)||!Number.isSafeInteger(item.startedMinute)||item.startedMinute<0||item.startedMinute>value.minutes)throw new Error('角色回饋紀錄無效。');}}
  for(const signal of value.signals){if(typeof signal.id!=='string'||!PLACE_BY_ID[signal.placeId]||!Number.isFinite(signal.createdMinute)||!Number.isFinite(signal.expiresAt))throw new Error('存檔事件線索有誤。');}
  return true;
 }
@@ -212,5 +217,5 @@ export function toExport(world){validateWorld(world);return JSON.stringify({...w
 export function fromImport(json,now=Date.now()){
  if(typeof json!=='string'||json.length>5_000_000)throw new Error('存檔檔案過大。');
  const imported=upgradeWorld(JSON.parse(json));
- return {...imported,id:id(),name:`${imported.name}（匯入）`.slice(0,60),savedAt:now,createdAt:now};
+ return {...imported,id:id(),name:`${imported.name}（匯入）`.slice(0,60),savedAt:now,createdAt:now,brainEnabled:false,brainOutcomes:[]};
 }

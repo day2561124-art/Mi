@@ -31,6 +31,9 @@ test('pinned wRITE Native Loop executes two committed turns with durable experie
     const first = await native.decide(makeBoundedBrainRequest(world, 'conan'));
     assert.equal(first.committed, true);
     assert.equal(first.action_id, 'wait');
+    assert.match(first.decision_id,/^[a-f0-9]{64}$/);
+    const receipt=await native.acknowledge({world_id:world.id,actor_id:'conan',decision_id:first.decision_id,action_id:'wait',kind:'observed',world_minute:1,place_id:'apartment'});
+    assert.equal(receipt.accepted,true);
     // Recreate the bridge as if Node restarted; it must reconnect to the
     // already persisted Native world lineage through the private index.
     const restarted = createNativeBrainBridge({
@@ -44,8 +47,10 @@ test('pinned wRITE Native Loop executes two committed turns with durable experie
     assert.equal(second.committed, true);
     assert.equal(second.action_id, 'wait');
     assert.equal(packets.length, 2);
+    assert.match(JSON.stringify(packets[1]),/本機存檔回報/);
     const index = JSON.parse(await readFile(join(root, 'private-index.json'), 'utf8'));
     const sessionId = index.worlds[world.id].session_id;
+    assert.equal(index.worlds[world.id].feedback[0].delivered_in?.startsWith('mi_evt_'),true);
     const history = await runtime.getWorldSimulationHistory(sessionId, { fixtureRoot: join(root, 'upstream') });
     assert.equal(history.turns.filter(turn => (turn.selected_action_intents || []).length > 0).length, 2);
     const again = await restarted.decide(makeBoundedBrainRequest(world, 'conan'));

@@ -13,14 +13,16 @@ export function createBrainServer({root=resolve('dist'),bridge=null}={}){
   const url=new URL(req.url,'http://localhost');
   const json=(status,data)=>{res.writeHead(status,{'Content-Type':'application/json; charset=utf-8','Cache-Control':'no-store','X-Content-Type-Options':'nosniff'});res.end(JSON.stringify(data));};
   if(url.pathname==='/api/brain/status')return json(200,bridge?bridge.status():{upstream:'wRITE',connected:false,decision_provider:false});
-  if(url.pathname==='/api/brain/decide'){
+  if(url.pathname==='/api/brain/decide'||url.pathname==='/api/brain/feedback'){
+   const isFeedback=url.pathname==='/api/brain/feedback';
    if(req.method!=='POST')return json(405,{error:'METHOD_NOT_ALLOWED'});
    if(!bridge)return json(503,{error:'UPSTREAM_NOT_CONFIGURED'});
-   if(!bridge.status().decision_provider)return json(503,{error:'BRAIN_SELECTOR_NOT_CONFIGURED'});
+   if(isFeedback&&typeof bridge.acknowledge!=='function')return json(503,{error:'FEEDBACK_NOT_SUPPORTED'});
+   if(!isFeedback&&!bridge.status().decision_provider)return json(503,{error:'BRAIN_SELECTOR_NOT_CONFIGURED'});
    const origin=req.headers.origin;
    if(origin){try{if(new URL(origin).host!==req.headers.host)return json(403,{error:'CROSS_ORIGIN_FORBIDDEN'});}catch{return json(403,{error:'CROSS_ORIGIN_FORBIDDEN'});}}
    let body='';for await(const chunk of req){body+=chunk;if(body.length>maxBody)return json(413,{error:'REQUEST_TOO_LARGE'});}
-   try{return json(200,await bridge.decide(JSON.parse(body)));}catch(e){return json(400,{error:e.code||'BRAIN_DECISION_FAILED',message:e.message});}
+   try{return json(200,await (isFeedback?bridge.acknowledge(JSON.parse(body)):bridge.decide(JSON.parse(body))));}catch(e){return json(400,{error:e.code||(isFeedback?'BRAIN_FEEDBACK_FAILED':'BRAIN_DECISION_FAILED'),message:e.message});}
   }
   if(req.method!=='GET'&&req.method!=='HEAD')return json(405,{error:'METHOD_NOT_ALLOWED'});
   try{

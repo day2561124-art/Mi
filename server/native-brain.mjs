@@ -4,6 +4,7 @@ import { dirname, join, resolve } from 'node:path';
 import { pathToFileURL } from 'node:url';
 
 const LIMIT = 200;
+const FEEDBACK_KINDS = new Set(['observed','arrived','investigated','not_confirmed','interrupted']);
 const string = (value, limit = 240) => String(value ?? '').slice(0, limit);
 const digest = value => createHash('sha256').update(JSON.stringify(value)).digest('hex');
 const clone = value => structuredClone(value);
@@ -48,12 +49,14 @@ export function validateNativeRequest(input) {
   }
   if (o.energy != null && (!Number.isFinite(o.energy) || o.energy < 0 || o.energy > 100)) error();
   if (o.social != null && (!Number.isFinite(o.social) || o.social < 0 || o.social > 100)) error();
+  if(o.place_id!=null&&!/^[a-z0-9_-]{1,80}$/.test(o.place_id))error();
+  if(input.actions.some(a=>a.place_id!=null&&!/^[a-z0-9_-]{1,80}$/.test(a.place_id)))error();
   return input;
 }
 
 // The Native engine holds its committed subjective history; this input is an
 // externally supplied, locally bounded observation, NOT the full Mi world.
-export function nativeWorldProjection(input, prior = {}) {
+export function nativeWorldProjection(input, prior = {}, feedback = []) {
   validateNativeRequest(input);
   const actor = `${input.observer.name} (${input.actor_id})`;
   const eventId = `mi_evt_${digest({ world: input.world_id, actor: input.actor_id, minute: input.world_minute, observer: input.observer, actions: input.actions }).slice(0, 24)}`;
@@ -64,6 +67,11 @@ export function nativeWorldProjection(input, prior = {}) {
     ...observer.nearby.map(name => `看見：${name}`),
     ...observer.visible_traces.map(t => `現場跡象：${t}`),
   ];
+  // Browser observations are not independently verified World truths.
+  const experienceReports = feedback.slice(-8).map(item => {
+    const label = item.kind==='arrived'?'行動紀錄顯示已抵達目的地':item.kind==='investigated'?'行動紀錄顯示已調查線索':item.kind==='not_confirmed'?'行動紀錄顯示未取得足夠證據':item.kind==='interrupted'?'行動紀錄顯示行動中斷':'行動紀錄顯示曾留在原地觀察';
+    return `本機存檔回報（未經伺服器驗證）：${label}；地點 ${string(item.place_id,80)}。`;
+  });
   const old = prior && typeof prior === 'object' ? clone(prior) : {};
   const simulationTime = new Date(Date.UTC(2026, 0, 1, 8, 0) + input.world_minute * 60_000).toISOString();
   return {
@@ -84,7 +92,7 @@ export function nativeWorldProjection(input, prior = {}) {
       [actor]: {
         ...(old.characters?.[actor] || {}),
         known: observer.known,
-        guessed: observer.uncertain,
+        guessed: [...observer.uncertain, ...experienceReports].slice(-24),
         current_goal: old.characters?.[actor]?.current_goal || '依自己掌握的資訊安排下一步',
         needs: { energy: observer.energy ?? null, social: observer.social ?? null },
       },
@@ -110,6 +118,41 @@ async function saveIndex(file, payload) {
   const temporary = `${file}.${process.pid}.tmp`;
   await writeFile(temporary, `${JSON.stringify(payload, null, 2)}\n`, { mode: 0o600 });
   await rename(temporary, file);
+}
+
+export function validateNativeFeedback(input, selection) {
+  const bad = () => { throw fail('BRAIN_FEEDBACK_INVALID','回饋與既有角色行動不符。'); };
+  if (!input || typeof input !== 'object' || Array.isArray(input)
+      || !/^[\w-]{8,128}$/.test(input.world_id ?? '')
+      || !/^[\w-]{1,80}$/.test(input.actor_id ?? '')
+      || !/^[a-f0-9]{64}$/.test(input.decision_id ?? '')
+      || typeof input.action_id !== 'string' || input.action_id.length>100
+      || !FEEDBACK_KINDS.has(input.kind)
+      || !Number.isSafeInteger(input.world_minute) || input.world_minute < 0 || input.world_minute>100_000_000
+      || typeof input.place_id !== 'string' || !/^[a-z0-9_-]{1,80}$/.test(input.place_id)
+      || !selection || selection.actor_id!==input.actor_id || selection.action_id!==input.action_id
+      || input.world_minute < selection.world_minute || input.world_minute-selection.world_minute>7*1440) bad();
+  const action=input.action_id;
+  if (action==='wait') { if (input.kind!=='observed' || input.place_id!==selection.origin_place_id || input.world_minute===selection.world_minute) bad(); }
+  else if (action.startsWith('go:')) {
+    if (!['arrived','interrupted'].includes(input.kind)) bad();
+    if (input.kind==='arrived' && input.place_id!==action.slice(3)) bad();
+  } else if (action.startsWith('check:')) {
+    if (!['investigated','not_confirmed','interrupted'].includes(input.kind)) bad();
+    if (input.kind!=='interrupted' && input.place_id!==selection.target_place_id) bad();
+  } else bad();
+  return { kind:input.kind, place_id:input.place_id, world_minute:input.world_minute };
+}
+
+function rememberSelection(entry, input, fingerprint, actionId, decisionId) {
+  const pending={...entry.pending};
+  pending[decisionId]={ actor_id:input.actor_id, world_minute:input.world_minute,
+    action_id:actionId, origin_place_id:input.observer.place_id??null,
+    target_place_id: actionId.startsWith('go:')?actionId.slice(3):
+      input.actions.find(a=>a.action_id===actionId)?.place_id??null,
+  };
+  entry.pending=Object.fromEntries(Object.entries(pending).slice(-64));
+  return entry;
 }
 
 /** One serial native turn per server process; wRITE owns its own durable history. */
@@ -156,15 +199,20 @@ export function createNativeBrainBridge({ upstream, decider, sessionOptions = {}
     } else {
       snapshot = await upstream.getWorldSimulationState(sessionId, sessionOptions);
     }
-    const projected = nativeWorldProjection(input, snapshot.state);
+    const undelivered=(entry?.feedback||[]).filter(x=>x.actor_id===input.actor_id&&!x.delivered_in&&x.world_minute<=input.world_minute).slice(-8);
+    const projected = nativeWorldProjection(input, snapshot.state, undelivered);
     const eventId = projected.event_queue[0].event_id;
     const priorHistory = await upstream.getWorldSimulationHistory(sessionId, sessionOptions);
     const previous = (priorHistory.turns || []).find(t => t?.event?.event_id === eventId && (t?.selected_action_intents || []).length > 0);
     if (previous) {
       const picked = previous.selected_action_intents?.find(x => x.character === `${input.observer.name} (${input.actor_id})`);
       const actionId = picked?.selection === 'reject_all' ? null : (picked?.action_id ?? null);
-      const response = { action_id: actionId, status: actionId ? 'selected' : 'rejected', actor_id: input.actor_id, world_minute: input.world_minute, mode: 'native_turn', committed: true, recovered: true };
-      index.worlds[input.world_id] = { session_id: sessionId, last_world_minute: input.world_minute, fingerprint, last_response: response };
+      const decisionId=actionId?digest({world_id:input.world_id,actor_id:input.actor_id,world_minute:input.world_minute,fingerprint,action_id:actionId}):null;
+      const response = { action_id: actionId, decision_id:decisionId, status: actionId ? 'selected' : 'rejected', actor_id: input.actor_id, world_minute: input.world_minute, mode: 'native_turn', committed: true, recovered: true };
+      const nextEntry={...index.worlds[input.world_id],session_id:sessionId,last_world_minute:input.world_minute,fingerprint,last_response:response};
+      if(decisionId)rememberSelection(nextEntry,input,fingerprint,actionId,decisionId);
+      for(const feedback of nextEntry.feedback||[])if(undelivered.some(x=>x.decision_id===feedback.decision_id))feedback.delivered_in=eventId;
+      index.worlds[input.world_id]=nextEntry;
       await saveIndex(indexFile, index);
       return response;
     }
@@ -214,17 +262,41 @@ export function createNativeBrainBridge({ upstream, decider, sessionOptions = {}
     });
     if (!outcome?.committed) throw fail('NATIVE_TURN_UNCOMMITTED', '上游 Native World 回合未完成提交。');
     const actionId = selections[0] ?? null;
-    const response = { action_id: actionId, status: actionId ? 'selected' : 'rejected', actor_id: input.actor_id, world_minute: input.world_minute, mode: 'native_turn', committed: true };
-    index.worlds[input.world_id] = { session_id: sessionId, last_world_minute: input.world_minute, fingerprint, last_response: response };
+    const decisionId=actionId?digest({world_id:input.world_id,actor_id:input.actor_id,world_minute:input.world_minute,fingerprint,action_id:actionId}):null;
+    const response = { action_id: actionId, decision_id:decisionId, status: actionId ? 'selected' : 'rejected', actor_id: input.actor_id, world_minute: input.world_minute, mode: 'native_turn', committed: true };
+    const nextEntry={...index.worlds[input.world_id],session_id:sessionId,last_world_minute:input.world_minute,fingerprint,last_response:response};
+    if(decisionId)rememberSelection(nextEntry,input,fingerprint,actionId,decisionId);
+    for(const feedback of nextEntry.feedback||[])if(undelivered.some(x=>x.decision_id===feedback.decision_id))feedback.delivered_in=eventId;
+    index.worlds[input.world_id]=nextEntry;
     await saveIndex(indexFile, index);
     return response;
   }
+  async function acknowledge(input) {
+    const index=await indexPromise;
+    if(!input||typeof input!=='object'||typeof input.world_id!=='string')throw fail('BRAIN_FEEDBACK_INVALID','世界識別無效。');
+    const entry=index.worlds[input.world_id];
+    const selection=entry?.pending?.[input.decision_id];
+    const reported=validateNativeFeedback(input,selection);
+    const previous=(entry.feedback||[]).find(x=>x.decision_id===input.decision_id);
+    if(previous){
+      if(digest({kind:previous.kind,place_id:previous.place_id,world_minute:previous.world_minute})!==digest(reported))
+        throw fail('BRAIN_FEEDBACK_CONFLICT','這次決策已有不同的回饋紀錄。');
+      return {ok:true,accepted:true,duplicate:true,source:'mi_client_reported'};
+    }
+    entry.feedback=[...(entry.feedback||[]),{...reported,decision_id:input.decision_id,actor_id:input.actor_id,action_id:input.action_id,delivered_in:null}].slice(-64);
+    await saveIndex(indexFile,index);
+    return {ok:true,accepted:true,duplicate:false,source:'mi_client_reported'};
+  }
   return {
+    acknowledge(input){
+      const current=lock.catch(()=>{}).then(()=>acknowledge(input));
+      lock=current.catch(()=>{});return current;
+    },
     decide(input) {
       const current = lock.catch(() => {}).then(() => run(input));
       lock = current.catch(() => {});
       return current;
     },
-    status: () => ({ upstream: 'wRITE', connected: true, decision_provider: typeof decider === 'function', mode: 'native_turn', durable_session_index: true, authoritative_mi_execution: false }),
+    status: () => ({ upstream: 'wRITE', connected: true, decision_provider: typeof decider === 'function', mode: 'native_turn', durable_session_index: true, authoritative_mi_execution: false, feedback_ingress: true }),
   };
 }

@@ -34,3 +34,27 @@ test('HTTP preview serves only built public assets, never project secrets or Nat
     await rm(root, { recursive: true, force: true });
   }
 });
+
+test('feedback endpoint accepts only native bridge, same origin, and bounded POST',async()=>{
+ const calls=[];
+ const bridge={status:()=>({connected:true,decision_provider:true,mode:'native_turn',feedback_ingress:true}),
+  decide:async()=>({status:'rejected'}),acknowledge:async value=>{calls.push(value);return {ok:true,accepted:true};}};
+ const server=createBrainServer({bridge});
+ try{
+  await new Promise(resolve=>server.listen(0,'127.0.0.1',resolve));
+  const base=`http://127.0.0.1:${server.address().port}`;
+  assert.equal((await fetch(base+'/api/brain/feedback')).status,405);
+  const badOrigin=await fetch(base+'/api/brain/feedback',{method:'POST',headers:{Origin:'https://attacker.invalid','Content-Type':'application/json'},body:'{}'});
+  assert.equal(badOrigin.status,403);
+  const huge=await fetch(base+'/api/brain/feedback',{method:'POST',headers:{'Content-Type':'application/json'},body:' '.repeat(25000)});
+  assert.equal(huge.status,413);
+  const answer=await fetch(base+'/api/brain/feedback',{method:'POST',headers:{'Content-Type':'application/json'},body:'{"kind":"observed"}'});
+  assert.equal(answer.status,200);assert.equal(calls.length,1);assert.equal(calls[0].kind,'observed');
+ }finally{await new Promise(resolve=>server.close(resolve));}
+ const capabilityServer=createBrainServer({bridge:{status:()=>({decision_provider:true,connected:true}),decide:async()=>({})}});
+ try{
+  await new Promise(resolve=>capabilityServer.listen(0,'127.0.0.1',resolve));
+  const base=`http://127.0.0.1:${capabilityServer.address().port}`;
+  assert.equal((await fetch(base+'/api/brain/feedback',{method:'POST',body:'{}'})).status,503);
+ }finally{await new Promise(resolve=>capabilityServer.close(resolve));}
+});

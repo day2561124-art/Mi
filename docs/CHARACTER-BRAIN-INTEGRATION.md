@@ -75,3 +75,15 @@ Native session 對應表只保存在伺服器的 `.beika-private/brain-native-in
 `npm run dev` 會先建置 `dist/`，HTTP 伺服器只公開此目錄，**不再將整個儲存庫當網站根目錄**。對 `.env`、`.beika-private/`、`server/` 的 HTTP 請求應回傳 404。預覽仍只可在本機開啟；若要公開部署，請先新增帳號權限和每世界隔離。
 
 2026-11-22 真實 GitHub Actions 的 `npm ci` 對目前固定版 wRITE 依賴回報 9 項安全性警告（3 moderate、5 high、1 critical）。此輪未擅自升級其他專案依賴，也**不建議在未審核依賴與權限前將 Native Node 後端公開部署**。
+
+
+## Rebuild 0.5：本機 World 回饋與下一輪主觀證據
+
+`src/core/brain-feedback.js` 紀錄與世界進程關聯的待回饋行動；`src/core/world.js` 在時間推進與角色行動日誌之後結算，並保留失敗與未完成狀態。`server/native-brain.mjs` 新增 `acknowledge()` 以已提交的 `decision_id` 進行受限、序列化、持久化與去重。HTTP 介面 `POST /api/brain/feedback` 僅在 Native 模式開放，沿用同源檢查與輸入大小限制。接續回合將尚未交付的回報以 `guessed` 候選主觀資訊再次投影給正確角色，完成回合後記錄已使用的事件識別，避免重複交付。
+
+### 重要可信度界線
+
+1. 米花結果由**瀏覽器的本機 World** 推進與保存，伺服器僅檢查回饋是否符合自己先前提出的動作識別、時間範圍與合理結果類型，**沒有獨立重演所有米花世界因果**。
+2. 因此回饋使用文字 `本機存檔回報（未經伺服器驗證）`，只進入該角色的 `guessed`，不提升為硬世界真相；絕不繞過 wRITE 的原生編碼、記憶檢索與提交裁定。
+3. 這是**已回傳到上游下一回合的主觀線索閉環**，並非完整 `World causal commit -> Native committed Experience Receipt -> longitudinal learning`。要達成完整跨角色長期因果仍須服務端世界權威、post-commit experience authority、衝突處理與重啟恢復驗收。
+4. GitHub Actions 使用固定 SHA 的真實上游子模組進行 Native Loop 的兩回合讀取測試；本地沒有子模組時該測試會跳過，不能把跳過計為通過。

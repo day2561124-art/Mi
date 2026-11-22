@@ -69,13 +69,20 @@ export function nativeWorldProjection(input, prior = {}, feedback = []) {
   ];
   // Client-stored results are a SUBJECTIVE report, not engine-verified World truth.
   // Never turn these into hidden facts or write to wRITE memory tables directly.
-  const experienceReports = feedback.slice(-8).map(item => {
+  const experienceReports = feedback
+    .filter(item => item.actor_id === input.actor_id)
+    .slice(-8).map(item => {
     const label = item.kind==='arrived'?'行動紀錄顯示已抵達目的地':item.kind==='investigated'?'行動紀錄顯示已調查線索':item.kind==='not_confirmed'?'行動紀錄顯示未取得足夠證據':item.kind==='interrupted'?'行動紀錄顯示行動中斷':'行動紀錄顯示曾留在原地觀察';
     const origin = item.source === 'mi_server_verified'
       ? '米花伺服器已保存並核對的歷史行動紀錄（供角色重新理解，並不自動等於已形成長期記憶）'
       : '本機存檔回報（未經伺服器驗證）';
-    return `${origin}：${label}；地點 ${string(item.place_id,80)}。`;
+    return { authoritative: item.source === 'mi_server_verified',
+      content: `${origin}：${label}；地點 ${string(item.place_id,80)}。` };
   });
+  // A newly read private record in this actor's NEXT turn. Native Phase63A,
+  // not Mi, determines if and how it becomes a subjective memory.
+  const verifiedReports = experienceReports.filter(report => report.authoritative);
+  visual.push(...verifiedReports.map(report => `查閱自己的行動紀錄：${report.content}`));
   const old = prior && typeof prior === 'object' ? clone(prior) : {};
   const simulationTime = new Date(Date.UTC(2026, 0, 1, 8, 0) + input.world_minute * 60_000).toISOString();
   return {
@@ -96,7 +103,8 @@ export function nativeWorldProjection(input, prior = {}, feedback = []) {
       [actor]: {
         ...(old.characters?.[actor] || {}),
         known: observer.known,
-        guessed: [...observer.uncertain, ...experienceReports].slice(-24),
+        // Unverified browser reports remain guesses, never observed evidence.
+        guessed: [...observer.uncertain, ...experienceReports.filter(report => !report.authoritative).map(report => report.content)].slice(-24),
         current_goal: old.characters?.[actor]?.current_goal || '依自己掌握的資訊安排下一步',
         needs: { energy: observer.energy ?? null, social: observer.social ?? null },
       },

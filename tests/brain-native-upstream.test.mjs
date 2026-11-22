@@ -107,6 +107,19 @@ test('pinned Native loop receives only server-committed Mi outcome after authori
     assert.equal(packets.length, 2);
     assert.match(JSON.stringify(packets[1]), /米花伺服器已保存並核對的歷史行動紀錄/);
     assert.doesNotMatch(JSON.stringify(packets[1]), /未經伺服器驗證/);
+    // Read the real Native world history: perception must become an upstream
+    // subjective memory through Phase63A, not through a Mi manual write.
+    const memoryIndex = JSON.parse(await readFile(join(root, 'native-index.json'), 'utf8'));
+    const memorySession = memoryIndex.worlds[Object.keys(memoryIndex.worlds)[0]].session_id;
+    const nativeState = await upstream.getWorldSimulationState(memorySession, { fixtureRoot: join(root, 'upstream') });
+    const records = nativeState.state.memories['江戶川柯南 (conan)'] || [];
+    assert.ok(records.some(record => JSON.stringify(record).includes('米花伺服器已保存並核對的歷史行動紀錄')),
+      'Native Phase63A must encode the verified personal result');
+    assert.ok(records.every(record => !JSON.stringify(record).includes('本機存檔回報（未經伺服器驗證）')));
+    const nativeHistory = await upstream.getWorldSimulationHistory(memorySession, { fixtureRoot: join(root, 'upstream') });
+    assert.ok(nativeHistory.turns.some(turn => (turn.subjective_memory_formation?.result?.created_memory_count ?? 0) > 0),
+      'A real Native memory formation event must be present');
+
     const index = JSON.parse(await readFile(join(root, 'native-index.json'), 'utf8'));
     assert.equal(index.worlds[Object.keys(index.worlds)[0]].feedback[0].source, 'mi_server_verified');
     assert.equal(index.worlds[Object.keys(index.worlds)[0]].feedback[0].delivered_in?.startsWith('mi_evt_'), true);
@@ -188,6 +201,17 @@ test('real wRITE Native alternates two independent NPC memories and replays only
     const nativeSession = index.worlds[Object.keys(index.worlds)[0]].session_id;
     const history = await upstream.getWorldSimulationHistory(nativeSession, { fixtureRoot: join(root, 'upstream') });
     assert.equal(history.turns.filter(turn => (turn.selected_action_intents || []).length > 0).length, 4);
+    const persisted = await upstream.getWorldSimulationState(nativeSession, { fixtureRoot: join(root, 'upstream') });
+    for (const actor of source.people) {
+      const key = actor.name + ' (' + actor.id + ')';
+      const records = persisted.state.memories[key] || [];
+      assert.ok(records.some(record => JSON.stringify(record).includes('米花伺服器已保存並核對的歷史行動紀錄')),
+        'Native personal memory must exist for ' + key);
+      const peer = source.people.find(other => other.id !== actor.id);
+      assert.ok(!records.some(record => JSON.stringify(record).includes(peer.name + ' (' + peer.id + ')')),
+        'Other NPC private memory must stay isolated');
+    }
+
     // A returned historical report is NOT being claimed as wRITE's official
     // Experience Receipt / automatic long-term memory consolidation.
   } finally { await rm(root, { recursive: true, force: true }); }

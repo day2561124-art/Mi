@@ -3,9 +3,10 @@ import {CANON_ARCS,CANON_BEATS} from './data/canon.js';
 import {makeWorld,worldClock,advanceWorld,catchUpWorld,toExport,fromImport,visitPlace,inspectRoom} from './core/world.js';
 import {findRoute,ROAD_EDGES} from './core/routes.js';
 import {makeBoundedBrainRequest,applyBrainDecision,characterActionCatalog} from './core/brain-bridge.js';
+import {readyBrainFeedback,markBrainFeedbackDelivered} from './core/brain-feedback.js';
 import {storage} from './core/storage.js';
 const root=document.getElementById('app');
-const ui={brainStatus:{connected:false,decision_provider:false,mode:null},brainBusy:false,brainLastCycle:null,world:null,worlds:[],view:'map',chosenPlace:'agency',chosenActor:null,inside:false,notice:'',saveStatus:'',saving:Promise.resolve(),lastTick:Date.now(),error:''};
+const ui={brainStatus:{connected:false,decision_provider:false,mode:null},brainBusy:false,feedbackBusy:false,brainLastCycle:null,world:null,worlds:[],view:'map',chosenPlace:'agency',chosenActor:null,inside:false,notice:'',saveStatus:'',saving:Promise.resolve(),lastTick:Date.now(),error:''};
 function esc(value){return String(value??'').replace(/[&<>"']/g,ch=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[ch]));}
 function when(ms){return new Intl.DateTimeFormat('zh-TW',{month:'numeric',day:'numeric',hour:'2-digit',minute:'2-digit'}).format(ms);}
 function actorHere(placeId){return ui.world.people.filter(p=>p.placeId===placeId);}
@@ -16,7 +17,7 @@ function formatLog(l){return `<article class="log-entry"><span class="log-time">
 function saveWorld(){
  if(!ui.world)return Promise.resolve();
  const snapshot=structuredClone({...ui.world,savedAt:Date.now()});ui.world.savedAt=snapshot.savedAt;ui.saveStatus='儲存中';
- ui.saving=ui.saving.catch(()=>{}).then(async()=>{const layer=await storage.put(snapshot);ui.saveStatus=`已自動儲存 · ${layer}`;ui.error='';render();}).catch(err=>{ui.error=err.message;ui.saveStatus='儲存失敗';render();});
+ ui.saving=ui.saving.catch(()=>{}).then(async()=>{const layer=await storage.put(snapshot);ui.saveStatus=`已自動儲存 · ${layer}`;ui.error='';render();return true;}).catch(err=>{ui.error=err.message;ui.saveStatus='儲存失敗';render();return false;});
  return ui.saving;
 }
 function commit(w){ui.world=w;saveWorld();render();}
@@ -28,7 +29,7 @@ async function openWorld(id){
 async function refreshWorlds(){ui.worlds=await storage.list();}
 function heading(){
  const clock=worldClock(ui.world.minutes);
- return `<header class="topbar"><div class="brand"><span class="brand-mark">米</span><div><strong>米花大舞台</strong><small>有命你就來 · REBUILD / 0.3</small></div></div><div class="top-world"><span class="overline">目前的世界</span><strong>${esc(ui.world.name)}</strong></div><div class="clock"><span>世界時間</span><strong>${esc(clock.label)}</strong></div><div class="top-actions"><button data-action="toggle" class="primary">${ui.world.paused?'▶ 開始運行':'❚❚ 暫停'}</button><button data-action="save" title="立即儲存">儲存</button><button data-action="worlds" title="世界列表">世界列表</button></div></header>`;
+ return `<header class="topbar"><div class="brand"><span class="brand-mark">米</span><div><strong>米花大舞台</strong><small>有命你就來 · REBUILD / 0.5</small></div></div><div class="top-world"><span class="overline">目前的世界</span><strong>${esc(ui.world.name)}</strong></div><div class="clock"><span>世界時間</span><strong>${esc(clock.label)}</strong></div><div class="top-actions"><button data-action="toggle" class="primary">${ui.world.paused?'▶ 開始運行':'❚❚ 暫停'}</button><button data-action="save" title="立即儲存">儲存</button><button data-action="worlds" title="世界列表">世界列表</button></div></header>`;
 }
 function leftNav(){const views=[['map','地圖','▦'],['people','人物','♙'],['journal','事件簿','▤'],['settings','世界設定','⚙']];return `<aside class="nav"><span class="nav-caption">觀察模式</span>${views.map(([id,name,icon])=>`<button class="nav-button ${ui.view===id?'active':''}" data-view="${id}"><span>${icon}</span>${name}</button>`).join('')}<div class="nav-grow"></div><div class="side-legend"><span class="status-orbit"></span>這是一個新建的獨立模擬器，不會更動原正式站。<p>${esc(ui.saveStatus||'每次操作自動存檔')}</p></div></aside>`;}
 function map(){
@@ -86,7 +87,7 @@ function personOrPlace(place){
 
 function peoplePage(){return `<section class="content-page"><div class="page-title"><div><span class="eyebrow">SIMULATED LIVES</span><h1>人物觀察</h1></div><p>所有人物共用世界時間，不會因切換視角而停下。</p></div><div class="people-grid">${ui.world.people.map(p=>`<button class="people-card" data-char="${esc(p.id)}">${avatar(p,'large')}<div><h3>${esc(p.name)}</h3><small>${esc(p.role)} · ${esc(PLACE_BY_ID[p.placeId]?.name||'未知地點')}</small><p>${esc(p.activity)}</p></div><span>›</span></button>`).join('')}</div></section>`;}
 function journalPage(){const logs=[...ui.world.logs].reverse();return `<section class="content-page"><div class="page-title"><div><span class="eyebrow">WORLD CHRONICLE</span><h1>事件簿</h1></div><p>時間線、現場觀察、人物決策與查證後果都保留發生時間及地點。</p></div><div class="journal-columns"><div class="journal-stream"><h2>世界紀錄</h2>${logs.map(formatLog).join('')}</div><aside class="canon-panel"><h2>原作事件排程</h2><p class="muted">第 883～900 話的 11 組摘要，以重新製作的地圖位置顯示。不是原站的正式事件資料。</p>${CANON_ARCS.map(a=>`<div class="arc-row"><span class="arc-index">${String(a.index+1).padStart(2,'0')}</span><span><strong>${esc(a.title)}</strong><small>${a.stages.filter(x=>ui.world.completedBeatIds.includes(x.id)).length}/3 已發生</small></span></div>`).join('')}</aside></div></section>`;}
-function settingsPage(){const ready=ui.brainStatus.connected&&ui.brainStatus.decision_provider;return `<section class="content-page settings"><div class="page-title"><div><span class="eyebrow">WORLD CONTROL</span><h1>世界設定</h1></div></div><div class="settings-grid"><section class="settings-card"><h2>存檔與遷移</h2><p>每次變化都寫入 IndexedDB；無法使用時會嘗試 localStorage。匯出 JSON 可自行備份。</p><div class="actions-line"><button data-action="save" class="primary">立即儲存</button><button data-action="export">匯出存檔 JSON</button><button data-action="import">匯入 JSON</button></div><small>${esc(ui.saveStatus)}</small></section><section class="settings-card"><h2>世界模擬</h2><p>切換暫停及速度；離線重開會補算經過的世界時間，單次最多七天。</p><label class="check"><input type="checkbox" id="canon-enabled" ${ui.world.canonEnabled?'checked':''}/>啟用原作事件時間線（新重作版）</label><p class="muted">一個事件階段最多執行一次，事件本身不強迫自訂人物前往現場。</p></section><section class="settings-card"><h2>GitHub 角色腦接線</h2><p>上游：day2561124-art/wRITE。感知、認知、候選行動使用固定版本的上游 Node.js 模組，角色選擇需額外設定決策提供者。</p><p>目前狀態：${ready?(ui.brainStatus.mode==='native_turn'?'wRITE Native 回合已就緒（候選行動交給米花執行）':'上游能力與決策提供者已就緒'):ui.brainStatus.connected?'上游已連線，但尚無決策提供者':'後端未連線，沿用本地規則模擬'}</p><label class="check"><input type="checkbox" id="brain-enabled" ${ui.world.brainEnabled?'checked':''} ${ready?'':'disabled'}/>啟用角色腦決策（實驗性，單次處理一名 NPC）</label><p class="muted">只送出當前角色可感知的資訊；World 負責核對行動並執行。停用或失敗時保留離線規則。無法在純靜態 GitHub Pages 直接運作。</p></section><section class="settings-card"><h2>獨立重製的限制</h2><p>目前已實作世界建立與持久化、路網走訪、室內觀察、人物自主日常、線索傳播與查證、事件時間線及存檔遷移。</p><p>仍未取得 Sites 第 35 版完整程式，因此原作全資料庫、雲端多裝置同步、原版美術與全部遊戲機制尚未還原。</p></section><section class="settings-card danger"><h2>移除世界</h2><p>刪除後，這部裝置中的該世界將不能復原。建議先匯出備份。</p><button data-action="delete">刪除此世界</button></section></div></section>`;}
+function settingsPage(){const ready=ui.brainStatus.connected&&ui.brainStatus.decision_provider;return `<section class="content-page settings"><div class="page-title"><div><span class="eyebrow">WORLD CONTROL</span><h1>世界設定</h1></div></div><div class="settings-grid"><section class="settings-card"><h2>存檔與遷移</h2><p>每次變化都寫入 IndexedDB；無法使用時會嘗試 localStorage。匯出 JSON 可自行備份。</p><div class="actions-line"><button data-action="save" class="primary">立即儲存</button><button data-action="export">匯出存檔 JSON</button><button data-action="import">匯入 JSON</button></div><small>${esc(ui.saveStatus)}</small></section><section class="settings-card"><h2>世界模擬</h2><p>切換暫停及速度；離線重開會補算經過的世界時間，單次最多七天。</p><label class="check"><input type="checkbox" id="canon-enabled" ${ui.world.canonEnabled?'checked':''}/>啟用原作事件時間線（新重作版）</label><p class="muted">一個事件階段最多執行一次，事件本身不強迫自訂人物前往現場。</p></section><section class="settings-card"><h2>GitHub 角色腦接線</h2><p>上游：day2561124-art/wRITE。感知、認知、候選行動使用固定版本的上游 Node.js 模組，角色選擇需額外設定決策提供者。</p><p>目前狀態：${ready?(ui.brainStatus.mode==='native_turn'?'wRITE Native 回合已就緒（候選行動交給米花執行）':'上游能力與決策提供者已就緒'):ui.brainStatus.connected?'上游已連線，但尚無決策提供者':'後端未連線，沿用本地規則模擬'}</p><label class="check"><input type="checkbox" id="brain-enabled" ${ui.world.brainEnabled?'checked':''} ${ready?'':'disabled'}/>啟用角色腦決策（實驗性，單次處理一名 NPC）</label><p class="muted">只送出當前角色可感知的資訊。已存檔的角色行動結果會在下一次思考前以『本機回報』送回上游，不假裝是伺服器已驗證的事實；服務中斷時保留待重試紀錄。無法在純靜態 GitHub Pages 直接運作。</p></section><section class="settings-card"><h2>獨立重製的限制</h2><p>目前已實作世界建立與持久化、路網走訪、室內觀察、人物自主日常、線索傳播與查證、事件時間線及存檔遷移。</p><p>仍未取得 Sites 第 35 版完整程式，因此原作全資料庫、雲端多裝置同步、原版美術與全部遊戲機制尚未還原。</p></section><section class="settings-card danger"><h2>移除世界</h2><p>刪除後，這部裝置中的該世界將不能復原。建議先匯出備份。</p><button data-action="delete">刪除此世界</button></section></div></section>`;}
 function startPage(){return `<div class="start"><header class="start-top"><div class="brand"><span class="brand-mark">米</span><div><strong>米花大舞台</strong><small>有命你就來</small></div></div><span class="pill">獨立重作 · 本地存檔版</span></header><section class="start-hero"><span class="eyebrow">AN IDLE WORLD OF STORIES</span><h1>街道照常運轉。<br /><em>故事不一定等你。</em></h1><p>建立自己的米花世界，觀察人物在地圖上生活、相遇、調查與經歷事件。每個世界獨立保存，離開頁面也不會丟掉進度。</p></section><div class="start-columns"><section class="new-world"><h2>創建新世界</h2><form id="create-world"><label for="world-name">世界名稱</label><input id="world-name" name="worldName" placeholder="例如：米花的週末" maxlength="60" required /><label class="check"><input name="custom" type="checkbox"/>加入可觀察的自訂居民</label><button type="submit" class="primary wide">創建並保存世界 →</button></form></section><section class="saved-worlds"><div class="section-head"><h2>我的世界</h2><span>${ui.worlds.length} 個存檔</span></div>${ui.worlds.length?ui.worlds.map(w=>`<button class="save-card" data-open="${esc(w.id)}"><span class="save-icon">▦</span><span><strong>${esc(w.name)}</strong><small>${esc(worldClock(w.minutes).label)} · 最近儲存 ${esc(when(w.savedAt))}</small></span><span>繼續 →</span></button>`).join(''):'<div class="empty-state"><span>◌</span><p>尚無存檔。建立世界後，此裝置會保存世界入口，建議定期匯出備份。</p></div>'}<div class="import-line"><button data-action="import">匯入既有重作版存檔 JSON</button></div></section></div><footer class="start-footer">新 GitHub 重作專案。原 Sites 正式站完全獨立，未經修改。</footer></div>`;}
 function render(){
  if(!ui.world){root.innerHTML=startPage()+(ui.notice?`<div class="toast">${esc(ui.notice)}<button data-action="dismiss">×</button></div>`:'');return;}
@@ -121,14 +122,37 @@ document.addEventListener('click',async event=>{const target=event.target.closes
  if(data.char){const p=ui.world.people.find(p=>p.id===data.char);if(!p)return;ui.chosenActor=p.id;ui.chosenPlace=p.placeId;ui.world={...ui.world,area:PLACE_BY_ID[p.placeId]?.area||'米花町'};ui.view='map';ui.inside=false;render();return;}
 });
 document.addEventListener('change',event=>{if(event.target.id==='canon-enabled'&&ui.world)commit({...ui.world,canonEnabled:event.target.checked});if(event.target.id==='brain-enabled'&&ui.world)commit({...ui.world,brainEnabled:event.target.checked});});
-setInterval(()=>{if(document.hidden||!ui.world)return;if(ui.brainBusy){ui.lastTick=Date.now();return;}if(ui.world.paused){ui.lastTick=Date.now();return;}const now=Date.now();const seconds=Math.min(30,Math.floor((now-ui.lastTick)/1000));if(seconds<5)return;ui.lastTick=now;commit(advanceWorld(ui.world,seconds*ui.world.speed));},5000);
+setInterval(()=>{if(document.hidden||!ui.world)return;if(ui.brainBusy||ui.feedbackBusy){ui.lastTick=Date.now();return;}if(ui.world.paused){ui.lastTick=Date.now();return;}const now=Date.now();const seconds=Math.min(30,Math.floor((now-ui.lastTick)/1000));if(seconds<5)return;ui.lastTick=now;commit(advanceWorld(ui.world,seconds*ui.world.speed));},5000);
 document.addEventListener('visibilitychange',()=>{if(document.hidden){if(ui.world)saveWorld();return;}const now=Date.now();ui.lastTick=now;if(ui.world){if(!ui.world.paused)commit(catchUpWorld(ui.world,now));else saveWorld();}});
 async function refreshBrainStatus(){
- try{const res=await fetch('/api/brain/status',{cache:'no-store'});if(!res.ok)throw new Error('backend unavailable');const state=await res.json();ui.brainStatus={connected:state.connected===true,decision_provider:state.decision_provider===true,mode:state.mode||null};}
+ try{const res=await fetch('/api/brain/status',{cache:'no-store'});if(!res.ok)throw new Error('backend unavailable');const state=await res.json();ui.brainStatus={connected:state.connected===true,decision_provider:state.decision_provider===true,mode:state.mode||null,feedback_ingress:state.feedback_ingress===true};}
  catch{ui.brainStatus={connected:false,decision_provider:false,mode:null};}render();
 }
+async function flushReadyBrainFeedback(){
+ if(!ui.world||ui.brainBusy||ui.feedbackBusy||ui.brainStatus.mode!=='native_turn'||!ui.brainStatus.feedback_ingress)return;
+ const worldId=ui.world.id;
+ const ready=readyBrainFeedback(ui.world).slice(0,4);
+ if(!ready.length)return;
+ ui.feedbackBusy=true;
+ try{
+  for(const packet of ready){
+   const controller=new AbortController(),timer=setTimeout(()=>controller.abort(),12000);
+   try{
+    const response=await fetch('/api/brain/feedback',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(packet),signal:controller.signal});
+    if(!response.ok)throw new Error(`角色後果回饋 ${response.status}`);
+    const accepted=await response.json();
+    if(accepted.ok!==true||accepted.accepted!==true)throw new Error('角色後果回饋未被接收');
+    if(!ui.world||ui.world.id!==worldId)return;
+    const next=markBrainFeedbackDelivered(ui.world,packet.decision_id);
+    commit(next);
+    if(!(await ui.saving))throw new Error('角色後果已接收，但本機確認標記尚未存檔');
+   }finally{clearTimeout(timer);}
+  }
+ }catch(error){ui.error=`角色後果暫未同步：${error.message}`;render();}
+ finally{ui.feedbackBusy=false;ui.lastTick=Date.now();}
+}
 async function runOneBrainCycle(){
- if(!ui.world||ui.world.paused||!ui.world.brainEnabled||ui.brainBusy||!ui.brainStatus.connected||!ui.brainStatus.decision_provider)return;
+ if(!ui.world||ui.world.paused||!ui.world.brainEnabled||ui.brainBusy||ui.feedbackBusy||!ui.brainStatus.connected||!ui.brainStatus.decision_provider)return;
  const eligible=ui.world.people.filter(p=>!p.targetId&&!p.travel);
  if(!eligible.length)return;
  const cycle=Math.floor(ui.world.minutes/30);if(ui.brainLastCycle===`${ui.world.id}:${cycle}`)return;
@@ -142,8 +166,11 @@ async function runOneBrainCycle(){
   try{const res=await fetch('/api/brain/decide',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(request),signal:controller.signal});if(!res.ok)throw new Error(`角色腦服務回應 ${res.status}`);answer=await res.json();}finally{clearTimeout(timer);}
   if(answer.status!=='selected'||!answer.action_id||!ui.world||ui.world.id!==request.world_id||ui.world.minutes!==request.world_minute)return;
   if(!characterActionCatalog(ui.world,actor.id).some(a=>a.action_id===answer.action_id))return;
-  commit(applyBrainDecision(ui.world,actor.id,answer.action_id));
+  if(ui.brainStatus.mode==='native_turn'&&!/^[a-f0-9]{64}$/.test(answer.decision_id||''))throw new Error('Native 回合沒有可核對的決策憑證');
+  commit(applyBrainDecision(ui.world,actor.id,answer.action_id,answer.decision_id||null));
+  if(!(await ui.saving))throw new Error('角色決策未能寫入本機存檔');
  }catch(error){ui.error=`角色腦暫時無法使用：${error.message}`;render();}finally{ui.brainBusy=false;}
 }
 setInterval(()=>{runOneBrainCycle();},10000);
+setInterval(()=>{flushReadyBrainFeedback();},15000);
 (async()=>{try{await refreshWorlds();refreshBrainStatus();render();}catch(err){root.innerHTML=`<p class="loading">無法啟動世界列表：${esc(err.message)}</p>`;}})();

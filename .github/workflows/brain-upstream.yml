@@ -3,8 +3,9 @@ on:
   push:
   pull_request:
 jobs:
-  upstream-smoke:
+  upstream-native-smoke:
     runs-on: ubuntu-latest
+    timeout-minutes: 20
     steps:
       - uses: actions/checkout@v4
         with:
@@ -15,6 +16,7 @@ jobs:
           node-version: '22'
       - run: npm ci
         working-directory: vendor/wRITE
-      - run: node --test tests/brain-upstream-smoke.test.mjs
+      - name: Capability bridge and Native Loop smoke
+        run: node --test tests/brain-upstream-smoke.test.mjs tests/brain-native-upstream.test.mjs
         env:
           WRITE_ROOT: ${{ github.workspace }}/vendor/wRITE

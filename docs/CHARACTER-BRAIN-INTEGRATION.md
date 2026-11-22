@@ -39,3 +39,33 @@ BRAIN_SELECTOR_MODULE=/absolute/path/outside/repo/selector.mjs npm run dev
 2. 完整 NPC 背景思考排程與限額，不把選擇器缺席當成思考成功。
 3. 用原生 `Character Brain` 完整回合與 World 因果裁定做多角色長時段對照。
 4. 對外部署時新增使用者世界隔離、權限驗證與持久後端，這次 preview 僅綁定本機 `127.0.0.1`。
+
+## Rebuild 0.4: Native 單回合（需明確啟用）
+
+新增 `server/native-brain.mjs`，直接載入 **wRITE 正式**
+`beginWorldSimulationSession`、`createWorldSimulationCharacterRuntimeManager`、
+`runWorldSimulationTurn`、`getWorldSimulationState`、
+`getWorldSimulationHistory` 與 `commitWorldSimulationTurn`，而不是把三個 direct capability
+誤當完整 Native 回合。
+
+```bash
+# 需預先安裝固定版 vendor/wRITE；BRAIN_SELECTOR_MODULE 須為本機受信任模組
+BRAIN_NATIVE=1 BRAIN_SELECTOR_MODULE=/absolute/path/to/selector.mjs npm run dev
+```
+
+Native session 對應表只保存在伺服器的 `.beika-private/brain-native-index.json`
+（已加入 `.gitignore`），wRITE 自己的世界 history 與角色 Current Mind 延續在
+它的 Agent Run 儲存層；回合先採納**單名角色可觀察的場景**，再執行 Native Brain。
+同世界重新決策會保留 session，對相同輸入去重，回溯的時間會被拒絕。
+
+**重要權責限制**：目前 Native 回合提交的是合法的「行動意圖」，不是米花實際
+已成功抵達、調查完成或產生某個世界後果。遊戲前端仍要以當前候選行動及
+世界分鐘重新確認，才會發動米花 World 行為。故此版本尚未完成**米花世界的伺服器
+權威提交／反饋 → wRITE 完整 Experience Receipt**。目前這部分不應稱為已完成。
+另外，正式雲端服務還需登入授權、使用者世界隔離、多執行個體鎖與伺服器存檔。
+本機服務仍僅聆聽 127.0.0.1。
+
+驗證：`npm test` 會檢查本地 Native Mock 的因果邊界、跨重啟 session index、
+重複呼叫與錯誤處理。GitHub `Upstream Character Brain Integration` 流程會在
+**真正固定版 wRITE checkout** 執行 `tests/brain-native-upstream.test.mjs`；
+只有該測試通過，才算原生執行契約通過。

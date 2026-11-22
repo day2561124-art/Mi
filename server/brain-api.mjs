@@ -3,6 +3,7 @@ import {readFile,stat} from 'node:fs/promises';
 import {extname,resolve,sep} from 'node:path';
 import {pathToFileURL} from 'node:url';
 import {loadWriteRuntime,createBrainBridge,loadLocalDecider} from './upstream-brain.mjs';
+import {loadNativeRuntime,createNativeBrainBridge} from './native-brain.mjs';
 const MIME={'.js':'text/javascript','.html':'text/html','.css':'text/css','.json':'application/json','.svg':'image/svg+xml'};
 const maxBody=20_000;
 export function createBrainServer({root=resolve('.'),bridge=null}={}){
@@ -34,8 +35,14 @@ export async function startBrainServer(env=process.env){
  const port=Number(env.PORT||4173);
  let bridge=null;
  try{
-  const runtime=await loadWriteRuntime(env.WRITE_ROOT);
-  bridge=createBrainBridge({upstream:runtime,decider:await loadLocalDecider(env)});
+  const chooser=await loadLocalDecider(env);
+  if(env.BRAIN_NATIVE==='1'){
+   const runtime=await loadNativeRuntime(env.WRITE_ROOT);
+   bridge=createNativeBrainBridge({upstream:runtime,decider:chooser,indexFile:env.BRAIN_INDEX_FILE||resolve('.beika-private/brain-native-index.json')});
+  }else{
+   const runtime=await loadWriteRuntime(env.WRITE_ROOT);
+   bridge=createBrainBridge({upstream:runtime,decider:chooser});
+  }
  }catch(e){console.error('wRITE 未就緒，仍提供原本的本地規則模擬：',e.message);}
  return createBrainServer({bridge}).listen(port,'127.0.0.1',()=>console.log(`Mi preview at http://127.0.0.1:${port} (upstream=${Boolean(bridge)}, chooser=${Boolean(bridge?.status().decision_provider)})`));
 }

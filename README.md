@@ -5,7 +5,7 @@
 - 原正式站：https://beika-stage.merebeacon.chatgpt.site/
 - Sites project ID：`appgprj_6affa67227cc8191aeb0a29b451af36a`
 - 本儲存庫：https://github.com/day2561124-art/Mi
-- 預計採用的版本名稱：`Rebuild 0.2`
+- 預計採用的版本名稱：`Rebuild 0.4`
 
 ## 已實作
 
@@ -59,3 +59,12 @@ npm run build        # 產生 dist/ 靜態站點
 直接使用 [wRITE](https://github.com/day2561124-art/wRITE) 的真實 Node.js 能力模組，而不是複製寫另一套角色腦。`vendor/wRITE` 是固定 commit 的 Git submodule。現在已完成感知、認知、行動候選接線與安全的 World 行動採納；**尚未完成 Native Loop、長期記憶/經驗提交及正式的線上角色選擇器**。現階段預設不啟用遠端決策，遊戲依然能用既有離線規則。
 
 詳見 [`docs/CHARACTER-BRAIN-INTEGRATION.md`](docs/CHARACTER-BRAIN-INTEGRATION.md)。Node.js 上游不能直接在靜態 GitHub Pages 上執行。
+
+## Rebuild 0.4：wRITE Native Turn（可選）
+
+新增 `BRAIN_NATIVE=1` 的 Native 單回合模式。它呼叫上游 `runWorldSimulationTurn`，
+保留 wRITE session、在私有索引中保存 lineage，讓上游管理角色認知／回合歷史。
+只有配置獨立 `BRAIN_SELECTOR_MODULE` 決策提供者時才會啟用。
+**此版本不是完整的世界後果雙向同步**：Native 提交意圖，米花現有 World 才判定
+實際行動與存檔。後續需以伺服器權威世界狀態完成雙向提交，方能宣稱完整 Native 閉環。
+參見 [整合文件](docs/CHARACTER-BRAIN-INTEGRATION.md)。

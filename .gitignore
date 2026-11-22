@@ -1,1 +1,25 @@
+# Local secrets and credentials (never commit)
+.env
+.env.*
+!.env.example
+*.pem
+*.key
+*.p12
+*.pfx
+credentials.json
+secrets.json
+*service-account*.json
+# Operational records and uploads should be backed up privately, not in public GitHub
+*.sqlite
+*.sqlite3
+*.db
+*.dump
+*.sql.gz
+backups/
+private-backups/
+player-uploads/
+user-uploads/
+# Build artifacts / developer files
+node_modules/
+.DS_Store
 .beika-private/

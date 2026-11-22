@@ -135,3 +135,11 @@ Native session 對應表只保存在伺服器的 `.beika-private/brain-native-in
 - wRITE Phase63B 控制候選記憶可取回性；此 resolver 只能選該候選集中的既有 `memory_id`，並指定 whole-content selector，不能寫入自由文字；Phase63C 負責實際檢索，Current Mind 負責內容呈現，選擇器只看到最終主觀內容。
 - 角色當回合已經正在閱讀同一筆新證據時，不會把這次「閱讀」偽稱為從過去「想起」。原本 wRITE 的回合版本與世界因果提交不被繞過。
 - 此策略不是通用人腦聯想機制；只服務米花伺服器已驗證行動紀錄，以確立端到端檢索接線。真正學習是否改變行動，必須由獨立對照測試驗證；所有行動仍需決策提供者實際選擇。
+
+## Rebuild 0.10：Phase76 主觀行動後果
+
+由 Native 決策的 `decision_id` 與伺服器 World 已結算的 `brainOutcomes` 才能組成 canonical Phase76A 投影；`acknowledgeAuthoritative` 同時儲存來源 hash 與投影身分。後續回合經 Phase76B 驗證，使用 `other_senses` 交給既有 Phase63A 記憶形成流程；禁止直接寫主觀記憶、信念或 Current Mind。
+
+收據只能由 Node 內部提供，瀏覽器來源不會生成。新角色可驗證來源，舊資料若缺 actor_name/intent 則降級只讀歷史紀錄，不能標成正式 Phase76。Phase63C 可檢索已形成的 Phase76 行動經驗，不能以候選存在推定已想起來。
+
+由於米花實際因果提交與 wRITE Native Loop 仍是跨儲存域，目前**未**將米花 World commit 偽裝成 wRITE 同一個 Native 事件的 action outcome；完整跨系統 transaction/Experience Receipt 仍須後續工程。

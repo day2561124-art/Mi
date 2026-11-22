@@ -105,8 +105,9 @@ test('pinned Native loop receives only server-committed Mi outcome after authori
     });
     assert.equal(second.decision.action_id, 'wait');
     assert.equal(packets.length, 2);
-    assert.match(JSON.stringify(packets[1]), /米花伺服器已保存並核對的歷史行動紀錄/);
+    assert.match(JSON.stringify(packets[1]), /post_outcome_action_experience/);
     assert.doesNotMatch(JSON.stringify(packets[1]), /未經伺服器驗證/);
+    assert.doesNotMatch(JSON.stringify(packets[1]), /engine-only hidden/);
     // The verified consequence is newly READ by this actor in the next Native
     // turn. Phase63A may now encode it as a subjective memory; Mi must NOT
     // directly insert anything into upstream memories.
@@ -114,14 +115,17 @@ test('pinned Native loop receives only server-committed Mi outcome after authori
     const nativeSessionId = nativeIndex.worlds[Object.keys(nativeIndex.worlds)[0]].session_id;
     const nativeState = await upstream.getWorldSimulationState(nativeSessionId, { fixtureRoot: join(root, 'upstream') });
     const conanMemories = nativeState.state.memories['江戶川柯南 (conan)'] || [];
-    assert.ok(conanMemories.some(memory => JSON.stringify(memory).includes('米花伺服器已保存並核對的歷史行動紀錄')),
-      'Upstream Phase63A must commit a subjective record of the verified Mi outcome, not just a transient guessed field');
+    assert.ok(conanMemories.some(memory => memory.memory_type === 'episodic_action_experience'
+      && memory.source?.kind === 'post_outcome_subjective_experience'
+      && memory.content?.kind === 'post_outcome_action_experience'),
+      'Upstream Phase63A must commit a canonical Phase76B subjective action experience');
     assert.ok(conanMemories.every(memory => !JSON.stringify(memory).includes('本機存檔回報（未經伺服器驗證）')));
     const nativeHistory = await upstream.getWorldSimulationHistory(nativeSessionId, { fixtureRoot: join(root, 'upstream') });
     assert.ok(nativeHistory.turns.some(turn => (turn.subjective_memory_formation?.result?.created_memory_count ?? 0) > 0),
       'Native memory formation, rather than Mi manual memory mutation, owns this step');
     const index = JSON.parse(await readFile(join(root, 'native-index.json'), 'utf8'));
     assert.equal(index.worlds[Object.keys(index.worlds)[0]].feedback[0].source, 'mi_server_verified');
+    assert.match(index.worlds[Object.keys(index.worlds)[0]].feedback[0].post_outcome_receipt?.post_outcome_subjective_perception_projection?.version ?? '', /phase76a-post-outcome/);
     assert.equal(index.worlds[Object.keys(index.worlds)[0]].feedback[0].delivered_in?.startsWith('mi_evt_'), true);
     const third = await store.decide(worldId, {
       operation_id: 'server-native-decision-2', expected_revision: delivered.revision,
@@ -195,7 +199,7 @@ test('real wRITE Native alternates two independent NPC memories and replays only
       assert.ok(packets.some(p => p.character === `${character.name} (${character.id})`));
     }
     const later = packets.slice(2);
-    assert.ok(later.every(p => JSON.stringify(p).includes('米花伺服器已保存並核對的歷史行動紀錄')));
+    assert.ok(later.every(p => JSON.stringify(p).includes('post_outcome_action_experience')));
     assert.ok(later.every(p => !JSON.stringify(p).includes('本機存檔回報（未經伺服器驗證）')));
     const index = JSON.parse(await readFile(join(root, 'native-index.json'), 'utf8'));
     const nativeSession = index.worlds[Object.keys(index.worlds)[0]].session_id;
@@ -207,8 +211,9 @@ test('real wRITE Native alternates two independent NPC memories and replays only
     for (const actor of source.people) {
       const key = `${actor.name} (${actor.id})`;
       const records = persisted.state.memories[key] || [];
-      assert.ok(records.some(record => JSON.stringify(record).includes('米花伺服器已保存並核對的歷史行動紀錄')),
-        `Native memory formation must store a verified report for ${key}`);
+      assert.ok(records.some(record => record.memory_type === 'episodic_action_experience'
+        && record.source?.kind === 'post_outcome_subjective_experience'),
+        `Native Phase63A must form a Phase76B subjective experience for ${key}`);
       const nextActor = source.people.find(other => other.id !== actor.id);
       assert.ok(!records.some(record => JSON.stringify(record).includes(`${nextActor.name} (${nextActor.id})`)),
         'An actor memory must not contain another actor runtime identity');
@@ -220,7 +225,7 @@ test('real wRITE Native alternates two independent NPC memories and replays only
 
 test('real Phase63C controlled contrast: the same later decision changes only when an encoded Mi experience is actually recalled', async t => {
   if (!process.env.WRITE_ROOT) return t.skip('Actual wRITE checkout only on upstream CI');
-  const { createMiMemoryRetrievalResolver, MI_VERIFIED_RECORD_CUE } = await import('../server/memory-retrieval.mjs');
+  const { createMiMemoryRetrievalResolver, MI_PHASE76_EXPERIENCE } = await import('../server/memory-retrieval.mjs');
   const { createWorldStore } = await import('../server/world-store.mjs');
   const parent = join(process.env.WRITE_ROOT, 'tests', '.tmp');
   await mkdir(parent, {recursive:true});
@@ -238,7 +243,7 @@ test('real Phase63C controlled contrast: the same later decision changes only wh
         const items=[mind.focus,...(mind.active_context??[]),...(mind.peripheral_context??[]),
           ...(mind.fading_context??[]),...(mind.suspended_context??[])].filter(Boolean);
         const hasRecollection=items.some(item=>item.context_origin==='recovered_memory'
-          && JSON.stringify(item.content).includes(MI_VERIFIED_RECORD_CUE));
+          && item.content?.kind === MI_PHASE76_EXPERIENCE);
         const options=packet.candidate_action_intents;
         const choice=hasRecollection ? options.find(item=>item.action_id.startsWith('go:'))?.action_id : 'wait';
         const action_id=choice ?? 'wait';
@@ -271,7 +276,8 @@ test('real Phase63C controlled contrast: the same later decision changes only wh
       const session=index.worlds[Object.keys(index.worlds)[0]].session_id;
       let nativeState=await upstream.getWorldSimulationState(session,{fixtureRoot:join(root,'upstream')});
       const memoryList=nativeState.state.memories['江戶川柯南 (conan)']??[];
-      assert.ok(memoryList.some(m=>JSON.stringify(m.content).includes(MI_VERIFIED_RECORD_CUE)),
+      assert.ok(memoryList.some(m=>m.memory_type === 'episodic_action_experience'
+        && m.content?.kind === MI_PHASE76_EXPERIENCE),
         'Native Phase63A must first encode verified past evidence before a future retrieval can occur');
       // Second observation should be settled, but not reconciled yet: the third
       // opportunity must not receive a fresh event with identical text.
@@ -279,7 +285,7 @@ test('real Phase63C controlled contrast: the same later decision changes only wh
       const before=packets.length;
       await decide(3);
       assert.equal(packets.length,before+1);
-      assert.equal(JSON.stringify(packets[2].perception??{}).includes(MI_VERIFIED_RECORD_CUE),false,
+      assert.equal(JSON.stringify(packets[2].perception??{}).includes(MI_PHASE76_EXPERIENCE),false,
         'This third decision must be grounded in memory retrieval, not the record being read again');
       nativeState=await upstream.getWorldSimulationState(session,{fixtureRoot:join(root,'upstream')});
       return {selectionHistory,recalled,memoryCount:nativeState.state.memories['江戶川柯南 (conan)']?.length??0,

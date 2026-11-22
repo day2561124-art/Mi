@@ -68,3 +68,7 @@ npm run build        # 產生 dist/ 靜態站點
 **此版本不是完整的世界後果雙向同步**：Native 提交意圖，米花現有 World 才判定
 實際行動與存檔。後續需以伺服器權威世界狀態完成雙向提交，方能宣稱完整 Native 閉環。
 參見 [整合文件](docs/CHARACTER-BRAIN-INTEGRATION.md)。
+
+### 0.4 安全補充
+
+`npm run dev` 現在只公開新建置的 `dist/`。不會把專案根目錄、秘密環境檔或 `.beika-private/` 的角色腦 session 索引當作靜態資源。固定上游 `wRITE` 的 npm 稽核尚有警告，暫不公開此 Node 後端。

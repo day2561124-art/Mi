@@ -6,7 +6,9 @@ import {loadWriteRuntime,createBrainBridge,loadLocalDecider} from './upstream-br
 import {loadNativeRuntime,createNativeBrainBridge} from './native-brain.mjs';
 const MIME={'.js':'text/javascript','.html':'text/html','.css':'text/css','.json':'application/json','.svg':'image/svg+xml'};
 const maxBody=20_000;
-export function createBrainServer({root=resolve('.'),bridge=null}={}){
+// Serve only compiled/public assets. Serving the repository root could expose
+// .env, private Native session indexes or the Node server source.
+export function createBrainServer({root=resolve('dist'),bridge=null}={}){
  return createServer(async(req,res)=>{
   const url=new URL(req.url,'http://localhost');
   const json=(status,data)=>{res.writeHead(status,{'Content-Type':'application/json; charset=utf-8','Cache-Control':'no-store','X-Content-Type-Options':'nosniff'});res.end(JSON.stringify(data));};

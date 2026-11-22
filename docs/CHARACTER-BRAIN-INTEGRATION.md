@@ -69,3 +69,9 @@ Native session 對應表只保存在伺服器的 `.beika-private/brain-native-in
 重複呼叫與錯誤處理。GitHub `Upstream Character Brain Integration` 流程會在
 **真正固定版 wRITE checkout** 執行 `tests/brain-native-upstream.test.mjs`；
 只有該測試通過，才算原生執行契約通過。
+
+### 本機預覽檔案隔離與部署警告
+
+`npm run dev` 會先建置 `dist/`，HTTP 伺服器只公開此目錄，**不再將整個儲存庫當網站根目錄**。對 `.env`、`.beika-private/`、`server/` 的 HTTP 請求應回傳 404。預覽仍只可在本機開啟；若要公開部署，請先新增帳號權限和每世界隔離。
+
+2026-11-22 真實 GitHub Actions 的 `npm ci` 對目前固定版 wRITE 依賴回報 9 項安全性警告（3 moderate、5 high、1 critical）。此輪未擅自升級其他專案依賴，也**不建議在未審核依賴與權限前將 Native Node 後端公開部署**。

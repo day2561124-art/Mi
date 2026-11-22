@@ -20,6 +20,7 @@ private-backups/
 player-uploads/
 user-uploads/
 # Build artifacts / developer files
+dist/
 node_modules/
 .DS_Store
 .beika-private/

@@ -5,6 +5,7 @@ import {pathToFileURL} from 'node:url';
 import {loadWriteRuntime,createBrainBridge,loadLocalDecider} from './upstream-brain.mjs';
 import {loadNativeRuntime,createNativeBrainBridge} from './native-brain.mjs';
 import {createWorldStore} from './world-store.mjs';
+import {createWorldAutonomyScheduler} from './world-scheduler.mjs';
 const MIME={'.js':'text/javascript','.html':'text/html','.css':'text/css','.json':'application/json','.svg':'image/svg+xml'};
 const maxBody=20_000;
 // Serve only compiled/public assets. Serving the repository root could expose
@@ -92,5 +93,10 @@ export async function startBrainServer(env=process.env){
   }
  }catch(e){console.error('wRITE 未就緒，仍提供原本的本地規則模擬：',e.message);}
  const worldStore=createWorldStore({root:env.WORLD_STORE_ROOT||resolve('.beika-private/worlds'),brain:bridge});
- return createBrainServer({bridge,worldStore}).listen(port,'127.0.0.1',()=>console.log(`Mi preview at http://127.0.0.1:${port} (upstream=${Boolean(bridge)}, chooser=${Boolean(bridge?.status().decision_provider)})`));
+ const server=createBrainServer({bridge,worldStore});
+ if(bridge?.status().mode==='native_turn'&&bridge?.status().decision_provider){
+  const scheduler=createWorldAutonomyScheduler({store:worldStore});
+  scheduler.start();server.on('close',()=>scheduler.stop());
+ }
+ return server.listen(port,'127.0.0.1',()=>console.log(`Mi preview at http://127.0.0.1:${port} (upstream=${Boolean(bridge)}, chooser=${Boolean(bridge?.status().decision_provider)})`));
 }

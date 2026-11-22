@@ -5,7 +5,7 @@
 - 原正式站：https://beika-stage.merebeacon.chatgpt.site/
 - Sites project ID：`appgprj_6affa67227cc8191aeb0a29b451af36a`
 - 本儲存庫：https://github.com/day2561124-art/Mi
-- 預計採用的版本名稱：`Rebuild 0.4`
+- 目前重作版本：`Rebuild 0.6`
 
 ## 已實作
 
@@ -24,7 +24,7 @@
 - 原 Sites 第 35 版前後端、原有完整設定、地圖精確外觀、原有角色與世界資料庫、其他系列完整事件、真實玩家存檔。
 - 正式原作事件的精確場景 ID、**Sites 原站舊存檔轉換**（目前僅支援 Rebuild 0.1 JSON）、跨作品完整角色與世界資料、真正成熟的長期角色腦、雲端跨裝置同步、多使用者登入。
 - 目前道路時間為 **模擬遊戲用的數值**，不是實際東京地理路線或交通時間。角色仍是規則型行為雛形，不應視為完整角色腦。
-- **目前為本地儲存的靜態前端**，尚無伺服器端資料庫或帳號系統。不能把使用者裝置內的存檔當作已同步到 GitHub。
+- **預設為本地儲存的靜態前端，可選擇本機 Node 伺服器權威世界**，尚無伺服器端資料庫或帳號系統。不能把使用者裝置內的存檔當作已同步到 GitHub。
 
 ## 執行
 
@@ -60,7 +60,7 @@ npm run build        # 產生 dist/ 靜態站點
 
 詳見 [`docs/CHARACTER-BRAIN-INTEGRATION.md`](docs/CHARACTER-BRAIN-INTEGRATION.md)。Node.js 上游不能直接在靜態 GitHub Pages 上執行。
 
-## Rebuild 0.4：wRITE Native Turn（可選）
+## Rebuild 0.5：wRITE Native Turn（可選）
 
 新增 `BRAIN_NATIVE=1` 的 Native 單回合模式。它呼叫上游 `runWorldSimulationTurn`，
 保留 wRITE session、在私有索引中保存 lineage，讓上游管理角色認知／回合歷史。
@@ -68,10 +68,6 @@ npm run build        # 產生 dist/ 靜態站點
 **此版本不是完整的世界後果雙向同步**：Native 提交意圖，米花現有 World 才判定
 實際行動與存檔。後續需以伺服器權威世界狀態完成雙向提交，方能宣稱完整 Native 閉環。
 參見 [整合文件](docs/CHARACTER-BRAIN-INTEGRATION.md)。
-
-### 0.4 安全補充
-
-`npm run dev` 現在只公開新建置的 `dist/`。不會把專案根目錄、秘密環境檔或 `.beika-private/` 的角色腦 session 索引當作靜態資源。固定上游 `wRITE` 的 npm 稽核尚有警告，暫不公開此 Node 後端。
 
 
 ## Rebuild 0.5｜角色行動後果的本機回報閉環
@@ -83,3 +79,12 @@ npm run build        # 產生 dist/ 靜態站點
 下個原生角色回合會把相應回報列入**該角色的主觀／待核對資訊**。這裡不會直接修改上游 `memories` 表，也不會把瀏覽器回報當作 `wRITE` 原生已核實的 World Experience Receipt。
 
 限制：此版為**單人本機預覽**，缺乏伺服器權威的米花世界快照、帳戶身分驗證及可跨裝置的世界持久化。現有 `BRAIN_SELECTOR_MODULE` 仍需由營運者設定，不會假裝自行擁有 LLM API。這些限制未解除前，不開放公網多人服務。
+
+
+## Rebuild 0.6｜伺服器權威世界（可選）
+
+在 `npm run dev` 本機預覽中，可直接建立「伺服器世界」，或在舊世界設定頁明確將瀏覽器存檔移轉（舊存檔會保留備份）。伺服器負責時間推進、路網、場景觀察、日誌及角色腦決策的原子持久化，使用版本 + SHA-256 拒絕過期寫入；以 HTTP API **拒絕瀏覽器自行覆寫既有世界快照**。
+
+由伺服器產生並保存的角色後果可送回 wRITE 下一次原生回合；舊瀏覽器回饋仍只當未驗證的主觀資料。這是後果驗證前移，不代表完整上游 Experience Receipt、長期學習或所有 NPC 已自主思考。需要自行設定 `BRAIN_NATIVE=1` 及受信任的決策提供者。此預覽尚未提供正式的登入／跨裝置同步／多使用者隔離，也不會在伺服器無使用者連線時主動持續模擬。**不得直接公開部署**。
+
+完整限制及 API 見 [`docs/CHARACTER-BRAIN-INTEGRATION.md`](docs/CHARACTER-BRAIN-INTEGRATION.md)。

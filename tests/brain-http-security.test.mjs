@@ -58,3 +58,21 @@ test('feedback endpoint accepts only native bridge, same origin, and bounded POS
   assert.equal((await fetch(base+'/api/brain/feedback',{method:'POST',body:'{}'})).status,503);
  }finally{await new Promise(resolve=>capabilityServer.close(resolve));}
 });
+
+
+test('direct public brain endpoints cannot impersonate a server-authoritative World lineage',async()=>{
+ const calls=[];
+ const bridge={status:()=>({decision_provider:true,connected:true,mode:'native_turn'}),
+  decide:async value=>{calls.push(value);return {status:'rejected'};},acknowledge:async value=>{calls.push(value);return {ok:true};}};
+ const server=createBrainServer({bridge});
+ try{
+  await new Promise(resolve=>server.listen(0,'127.0.0.1',resolve));
+  const url=`http://127.0.0.1:${server.address().port}`;
+  for(const path of ['/api/brain/decide','/api/brain/feedback']){
+   const response=await fetch(url+path,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({world_id:'srv_'+ 'b'.repeat(48)})});
+   assert.equal(response.status,403);
+   assert.equal((await response.json()).error,'RESERVED_WORLD_LINEAGE');
+  }
+  assert.equal(calls.length,0);
+ }finally{await new Promise(resolve=>server.close(resolve));}
+});

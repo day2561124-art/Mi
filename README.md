@@ -5,7 +5,7 @@
 - 原正式站：https://beika-stage.merebeacon.chatgpt.site/
 - Sites project ID：`appgprj_6affa67227cc8191aeb0a29b451af36a`
 - 本儲存庫：https://github.com/day2561124-art/Mi
-- 目前重作版本：`Rebuild 0.6`
+- 目前重作版本：`Rebuild 0.8`
 
 ## 已實作
 
@@ -102,3 +102,10 @@ npm run build        # 產生 dist/ 靜態站點
 - 本功能仍限本機可信單使用者 localhost。未完成跨行程檔案鎖、登入授權、跨裝置雲端同步、外部模型提供者配置與依賴安全修補，不可直接公開部署。
 
 驗證：`npm run check`，以及 GitHub 上游流程實際拉取固定版 `vendor/wRITE` 執行原生多角色回合測試（本機沒有子模組時測試必須跳過而不能冒稱通過）。
+
+
+## Rebuild 0.8：正式主觀記憶形成入口
+
+已由伺服器確認的角色個人行動結果，於下一回合成為該 NPC 可查閱的個人紀錄，由真正 wRITE Native Phase63A 決定是否編碼為主觀記憶。米花不自行寫入上游 memories。舊版瀏覽器自報結果仍只屬猜測；不同角色的紀錄不互通。
+
+新增真實上游測試驗證主觀記憶是否落盤；未通過不得視作完成。這還不等於 Phase63C 真正記憶取回、語義學習或 wRITE 原生 post-outcome Experience Receipt 已驗證。不可公開部署未經授權的 Node 伺服器。

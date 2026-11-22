@@ -123,8 +123,8 @@ async function saveIndex(file, payload) {
 export function validateNativeFeedback(input, selection) {
   const bad = () => { throw fail('BRAIN_FEEDBACK_INVALID','回饋與既有角色行動不符。'); };
   if (!input || typeof input !== 'object' || Array.isArray(input)
-      || !/^[\\w-]{8,128}$/.test(input.world_id ?? '')
-      || !/^[\\w-]{1,80}$/.test(input.actor_id ?? '')
+      || !/^[\w-]{8,128}$/.test(input.world_id ?? '')
+      || !/^[\w-]{1,80}$/.test(input.actor_id ?? '')
       || !/^[a-f0-9]{64}$/.test(input.decision_id ?? '')
       || typeof input.action_id !== 'string' || input.action_id.length>100
       || !FEEDBACK_KINDS.has(input.kind)

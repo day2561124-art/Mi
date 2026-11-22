@@ -87,3 +87,26 @@ Native session 對應表只保存在伺服器的 `.beika-private/brain-native-in
 2. 因此回饋使用文字 `本機存檔回報（未經伺服器驗證）`，只進入該角色的 `guessed`，不提升為硬世界真相；絕不繞過 wRITE 的原生編碼、記憶檢索與提交裁定。
 3. 這是**已回傳到上游下一回合的主觀線索閉環**，並非完整 `World causal commit -> Native committed Experience Receipt -> longitudinal learning`。要達成完整跨角色長期因果仍須服務端世界權威、post-commit experience authority、衝突處理與重啟恢復驗收。
 4. GitHub Actions 使用固定 SHA 的真實上游子模組進行 Native Loop 的兩回合讀取測試；本地沒有子模組時該測試會跳過，不能把跳過計為通過。
+
+## Rebuild 0.6：伺服器權威米花世界（本機單使用者預覽）
+
+本輪新增 `server/world-store.mjs` 與 `src/core/world-api.js`，讓使用者可選擇將世界交由 **Node 服務端**保存，而非要求瀏覽器自行宣告完成的世界事件。`npm run dev` 在 `127.0.0.1:4173` 同時提供靜態頁面和世界 API。
+
+- 在創建世界時勾選「儲存至本機伺服器」，即可建立獨立的伺服器世界。世界存於 `.beika-private/worlds/<id>.json`，**不會上傳 GitHub 或原 Sites**。
+- 現有本機世界可從「世界設定」明確選擇移轉。此為一次性、不可覆蓋的建立操作，會保留原本 IndexedDB / localStorage 存檔供使用者備份。
+- 原本瀏覽器存檔所帶的 `brainOutcomes` **不會被升格成伺服器驗證的後果**。移轉會清除未認證的角色腦回饋、暫停世界、關閉角色腦開關，並記錄 `historic_client_events_unverified`；歷史劇情／人物資料作為匯入初始狀態保留，但不對先前事件宣稱伺服器曾獨立核實。
+- 伺服器只提供固定指令 `advance`、`catchup`、`visit`、`room`、`pause`、`speed`、`canon`、`brain_enabled`。不接受對現有世界的任意 JSON `replace`／`put`。每次指令附 `expected_revision`、`expected_hash` 及 `operation_id`，過期或衝突操作被拒絕。世界狀態採原子檔案替換，單個 Node 程序內序列化。
+- 伺服器端的 `/api/worlds/<id>/brain-turn` 直接從自己保存的 World 構造角色感知、取得上游 Native 決定並驗證可行行動，再提交 World。結果仍必須等 World 實際推進、留下日誌才算成立。
+- `/api/worlds/<id>/reconcile` 只能由伺服器從**已保存的** `brainOutcomes` 建立回饋，透過內部 `acknowledgeAuthoritative` 通道提交至上游。失敗時保留 ready 狀態，不會冒報已交付。伺服器與瀏覽器使用不同的上游世界識別，避免兩份存檔誤混角色記憶。
+- 上游下一回合會取得「米花伺服器已保存並核對的歷史行動紀錄」，和既有「本機存檔回報（未經伺服器驗證）」分開標示；**仍然不是完整 wRITE Native Experience Receipt / 長期學習**。上游記憶形成仍由原生機制自行決定，不能當作自動學到。
+- 未啟用上游決策提供者時，世界照常依既有規則推進，不能視為所有 NPC 已由 Character Brain 控制。伺服器不會在沒有使用者連線時自行建立持續監控排程，重新進入時才會補算應有的遊戲時間。
+
+### API 與測試
+
+`GET /api/worlds`、`POST /api/worlds`、`POST /api/worlds/migrate`、`GET /api/worlds/<id>`、`POST /api/worlds/<id>/commands`、`POST /api/worlds/<id>/brain-turn`、`POST /api/worlds/<id>/reconcile`。寫入需 JSON，同源檢查和內容大小限制，伺服器資料不會經由靜態檔案路由曝光。
+
+`npm run check` 覆蓋伺服器重開、操作重播、版本競態、已損壞世界隔離、本地備份保留、客戶端不可竄改已提交世界、回饋中斷重試及實際前端→HTTP→世界儲存流程。GitHub upstream workflow 另用固定版真實 `wRITE` checkout 執行「第一回合 → 世界實際推進 → 已保存的回饋 → 第二回合」測試。
+
+### 安全與尚未完成
+
+此模式**僅為單一可信使用者的 localhost 預覽**，**不是可上公網的多人或雲端服務**：沒有帳號登入、持有人授權、資料加密、跨伺服器檔案鎖、跨裝置同步及完整備份回復；同一資料夾不可由多個 Node 程序同時寫入。正式公開之前必須先實作隔離、認證、備份與依賴安全稽核。原 Sites 仍獨立且未修改。

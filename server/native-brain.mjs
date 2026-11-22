@@ -67,10 +67,14 @@ export function nativeWorldProjection(input, prior = {}, feedback = []) {
     ...observer.nearby.map(name => `看見：${name}`),
     ...observer.visible_traces.map(t => `現場跡象：${t}`),
   ];
-  // Browser observations are not independently verified World truths.
+  // Client-stored results are a SUBJECTIVE report, not engine-verified World truth.
+  // Never turn these into hidden facts or write to wRITE memory tables directly.
   const experienceReports = feedback.slice(-8).map(item => {
     const label = item.kind==='arrived'?'行動紀錄顯示已抵達目的地':item.kind==='investigated'?'行動紀錄顯示已調查線索':item.kind==='not_confirmed'?'行動紀錄顯示未取得足夠證據':item.kind==='interrupted'?'行動紀錄顯示行動中斷':'行動紀錄顯示曾留在原地觀察';
-    return `本機存檔回報（未經伺服器驗證）：${label}；地點 ${string(item.place_id,80)}。`;
+    const origin = item.source === 'mi_server_verified'
+      ? '米花伺服器已保存並核對的歷史行動紀錄（供角色重新理解，並不自動等於已形成長期記憶）'
+      : '本機存檔回報（未經伺服器驗證）';
+    return `${origin}：${label}；地點 ${string(item.place_id,80)}。`;
   });
   const old = prior && typeof prior === 'object' ? clone(prior) : {};
   const simulationTime = new Date(Date.UTC(2026, 0, 1, 8, 0) + input.world_minute * 60_000).toISOString();
@@ -151,6 +155,7 @@ function rememberSelection(entry, input, fingerprint, actionId, decisionId) {
     target_place_id: actionId.startsWith('go:')?actionId.slice(3):
       input.actions.find(a=>a.action_id===actionId)?.place_id??null,
   };
+  // Older outstanding feedback must not grow without bound.
   entry.pending=Object.fromEntries(Object.entries(pending).slice(-64));
   return entry;
 }
@@ -271,25 +276,34 @@ export function createNativeBrainBridge({ upstream, decider, sessionOptions = {}
     await saveIndex(indexFile, index);
     return response;
   }
-  async function acknowledge(input) {
+  async function acknowledge(input, source = 'mi_client_reported') {
+    if (source === 'mi_client_reported' && String(input?.world_id ?? '').startsWith('srv_')) throw fail('BRAIN_FEEDBACK_SCOPE_DENIED', '伺服器世界不接受瀏覽器自報結果');
+    if (source === 'mi_server_verified' && !String(input?.world_id ?? '').startsWith('srv_')) throw fail('BRAIN_FEEDBACK_SCOPE_DENIED', '權威回饋只允許伺服器世界識別');
     const index=await indexPromise;
     if(!input||typeof input!=='object'||typeof input.world_id!=='string')throw fail('BRAIN_FEEDBACK_INVALID','世界識別無效。');
     const entry=index.worlds[input.world_id];
     const selection=entry?.pending?.[input.decision_id];
     const reported=validateNativeFeedback(input,selection);
     const previous=(entry.feedback||[]).find(x=>x.decision_id===input.decision_id);
+    if (!['mi_client_reported', 'mi_server_verified'].includes(source)) throw fail('BRAIN_FEEDBACK_INVALID','無效回饋來源');
     if(previous){
       if(digest({kind:previous.kind,place_id:previous.place_id,world_minute:previous.world_minute})!==digest(reported))
         throw fail('BRAIN_FEEDBACK_CONFLICT','這次決策已有不同的回饋紀錄。');
-      return {ok:true,accepted:true,duplicate:true,source:'mi_client_reported'};
+      if (previous.source !== source) throw fail('BRAIN_FEEDBACK_SOURCE_CONFLICT','回饋來源與先前紀錄不同');
+      return {ok:true,accepted:true,duplicate:true,source};
     }
-    entry.feedback=[...(entry.feedback||[]),{...reported,decision_id:input.decision_id,actor_id:input.actor_id,action_id:input.action_id,delivered_in:null}].slice(-64);
+    entry.feedback=[...(entry.feedback||[]),{...reported,decision_id:input.decision_id,actor_id:input.actor_id,action_id:input.action_id,delivered_in:null,source}].slice(-64);
     await saveIndex(indexFile,index);
-    return {ok:true,accepted:true,duplicate:false,source:'mi_client_reported'};
+    return {ok:true,accepted:true,duplicate:false,source};
   }
   return {
     acknowledge(input){
-      const current=lock.catch(()=>{}).then(()=>acknowledge(input));
+      const current=lock.catch(()=>{}).then(()=>acknowledge(input, 'mi_client_reported'));
+      lock=current.catch(()=>{});return current;
+    },
+    // Internal server-only API: do not expose this as a client-provided HTTP flag.
+    acknowledgeAuthoritative(input){
+      const current=lock.catch(()=>{}).then(()=>acknowledge(input, 'mi_server_verified'));
       lock=current.catch(()=>{});return current;
     },
     decide(input) {

@@ -111,6 +111,16 @@ npm run build        # 產生 dist/ 靜態站點
 - 新增真實上游 CI 斷言：伺服器世界先產生經驗 → 完成 wRITE 下一個原生回合 → 上游提交新主觀記憶紀錄；另驗證兩人經驗不混用。測試失敗則不可聲稱 Native 學習驗收完成。
 - **已形成主觀記憶 ≠ 自動證明檢索、語義學習或 wRITE 官方 post-outcome Experience Receipt 已完成。** 須另測實際 Phase63C 取回、目標/決策差異與 Phase76 內建的 post-outcome 主觀經驗接線。伺服器尚未具備公網多人安全條件。
 
-## Rebuild 0.9：Phase63C 已有來源的經驗取回
+## Rebuild 0.10：Phase63C 已有來源的經驗取回
 
 `server/memory-retrieval.mjs` 將固定版上游已有的 Phase63C `memoryRetrievalResolver` 接入 Mi Native Loop。它只選取原生 Phase63A 已經編碼、符合下一步思考目標的本角色伺服器驗證行動紀錄；取回由上游執行，不能作者式補寫回憶，也不能把臨時讀取冒充記憶取回。上游 CI 新增已形成記憶但禁止檢索，與允許真實檢索後的第三回合選擇對照。這只是狹義的記憶取回功能，非 Phase76 全面知識學習或長期記憶鞏固。
+
+## Rebuild 0.10：伺服器後果的 Phase76A/76B 正式來源接線
+
+`server/post-outcome.mjs` 使用固定版 `wRITE` 的 Phase76A canonical projection 和 Phase76B hash-verified memory bridge。只有伺服器已結算並經 `acknowledgeAuthoritative` 的結果，且保存了原始 NPC 名稱、動作與決策身分，才能建立收據。結果區分成功抵達、完成查看、未證實與中斷，中斷不能被宣告為已完成。
+
+收據寫入伺服器私有 Native index，隔次 Native 回合由 Phase76B 重新驗證並交到 `other_senses`，再由 `wRITE` Phase63A 形成記憶。這**不是**米花自己直接寫 `wRITE.memories`。早期缺少行動描述的歷史回饋沿用 v0.9 說明文字，不偽造正式收據。已提交收據有 hash 驗證與跨重啟去重，不能傳給其他角色。
+
+Phase63C 有新的 `episodic_action_experience` 來源檢索條件，不能把當回合正在感知的結果同時當回憶。這是受控的跨回合記憶來源流程，不等於 `wRITE` native action commit 已直接擁有米花的 World 實際因果提交，也不代表長期記憶鞏固、獨立學習或無模型的自主決策已完成。
+
+本機需 `npm run check`；正式 Phase76A/B 與兩名 NPC 記憶隔離，必須在 GitHub Actions 以固定版 `vendor/wRITE` 執行 `tests/brain-native-upstream.test.mjs` 驗收。正式站仍需登入授權、跨行程持久鎖與上游安全審核。原 Sites 網站不受本工程影響。

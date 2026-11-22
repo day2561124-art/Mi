@@ -2,6 +2,7 @@
 // action records. It selects an existing subjective memory reference only.
 // wRITE remains the sole authority for retrieval materialization and Current Mind.
 export const MI_VERIFIED_RECORD_CUE = '米花伺服器已保存並核對的歷史行動紀錄';
+export const MI_PHASE76_EXPERIENCE = 'post_outcome_action_experience';
 
 const noProcess = () => ({ process_occurred: false });
 const boundedString = value => typeof value === 'string' && value.length <= 2000 ? value : null;
@@ -19,13 +20,17 @@ export function createMiMemoryRetrievalResolver({ onResolution } = {}) {
     const visible = JSON.stringify(input.perception?.observed ?? []);
     // When already looking at the same personal record, that is perception,
     // not a claim that a memory retrieval just occurred.
-    if (visible.includes(MI_VERIFIED_RECORD_CUE)) return noProcess();
+    if (visible.includes(MI_VERIFIED_RECORD_CUE) ||
+      JSON.stringify(input.perception?.other_senses ?? []).includes(MI_PHASE76_EXPERIENCE)) return noProcess();
 
     const relevant = candidates.filter(record =>
       record && typeof record === 'object' &&
       /^memory_[a-f0-9]{24}$/.test(record.memory_id ?? '') &&
-      boundedString(record.content)?.includes(MI_VERIFIED_RECORD_CUE) &&
-      record.source?.kind === 'direct_perception' &&
+      ((boundedString(record.content)?.includes(MI_VERIFIED_RECORD_CUE) &&
+        record.source?.kind === 'direct_perception') ||
+        (record.content?.kind === MI_PHASE76_EXPERIENCE &&
+        record.source?.kind === 'post_outcome_subjective_experience' &&
+        typeof record.content.perceived_result === 'string')) &&
       record.engine_persisted_trace === true &&
       record.suppressed !== true && record.accessible !== false
     );

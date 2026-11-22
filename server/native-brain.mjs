@@ -1,3 +1,4 @@
+import { createMiPhase76Receipt, readMiPhase76Observations, phase76Available } from './post-outcome.mjs';
 import { createMiMemoryRetrievalResolver } from './memory-retrieval.mjs';
 import { createHash } from 'node:crypto';
 import { mkdir, readFile, rename, writeFile } from 'node:fs/promises';
@@ -13,10 +14,12 @@ const fail = (code, message) => Object.assign(new Error(message), { code });
 
 export async function loadNativeRuntime(root = process.env.WRITE_ROOT || resolve('vendor/wRITE')) {
   const base = join(resolve(root), 'server', 'src');
-  const [session, loop, state] = await Promise.all([
+  const [session, loop, state, subjective, memoryBridge] = await Promise.all([
     import(pathToFileURL(join(base, 'world-simulation-session-service.mjs')).href),
     import(pathToFileURL(join(base, 'world-simulation-loop-service.mjs')).href),
     import(pathToFileURL(join(base, 'world-simulation-state-service.mjs')).href),
+    import(pathToFileURL(join(base, 'world-simulation-post-outcome-subjective-perception-service.mjs')).href),
+    import(pathToFileURL(join(base, 'world-simulation-post-outcome-subjective-memory-bridge-service.mjs')).href),
   ]);
   const required = {
     beginWorldSimulationSession: session.beginWorldSimulationSession,
@@ -25,6 +28,8 @@ export async function loadNativeRuntime(root = process.env.WRITE_ROOT || resolve
     getWorldSimulationState: state.getWorldSimulationState,
     getWorldSimulationHistory: state.getWorldSimulationHistory,
     commitWorldSimulationTurn: state.commitWorldSimulationTurn,
+    projectWorldSimulationPostOutcomeSubjectivePerception: subjective.projectWorldSimulationPostOutcomeSubjectivePerception,
+    bridgeWorldSimulationPostOutcomeSubjectiveExperienceToMemory: memoryBridge.bridgeWorldSimulationPostOutcomeSubjectiveExperienceToMemory,
   };
   if (Object.values(required).some(fn => typeof fn !== 'function')) {
     throw fail('NATIVE_RUNTIME_INCOMPATIBLE', 'wRITE Native Loop 入口缺失。');
@@ -57,7 +62,7 @@ export function validateNativeRequest(input) {
 
 // The Native engine holds its committed subjective history; this input is an
 // externally supplied, locally bounded observation, NOT the full Mi world.
-export function nativeWorldProjection(input, prior = {}, feedback = []) {
+export function nativeWorldProjection(input, prior = {}, feedback = [], postOutcomeObservations = []) {
   validateNativeRequest(input);
   const actor = `${input.observer.name} (${input.actor_id})`;
   const eventId = `mi_evt_${digest({ world: input.world_id, actor: input.actor_id, minute: input.world_minute, observer: input.observer, actions: input.actions }).slice(0, 24)}`;
@@ -70,14 +75,13 @@ export function nativeWorldProjection(input, prior = {}, feedback = []) {
   ];
   // Client-stored results are a SUBJECTIVE report, not engine-verified World truth.
   // Never turn these into hidden facts or write to wRITE memory tables directly.
-  const experienceReports = feedback
-    .filter(item => item.actor_id === input.actor_id)
-    .slice(-8).map(item => {
+  const ownFeedback = feedback.filter(item => item.actor_id === input.actor_id).slice(-8);
+  const experienceReports = ownFeedback.map(item => {
     const label = item.kind==='arrived'?'行動紀錄顯示已抵達目的地':item.kind==='investigated'?'行動紀錄顯示已調查線索':item.kind==='not_confirmed'?'行動紀錄顯示未取得足夠證據':item.kind==='interrupted'?'行動紀錄顯示行動中斷':'行動紀錄顯示曾留在原地觀察';
     const origin = item.source === 'mi_server_verified'
       ? '米花伺服器已保存並核對的歷史行動紀錄（供角色重新理解，並不自動等於已形成長期記憶）'
       : '本機存檔回報（未經伺服器驗證）';
-    return { authoritative: item.source === 'mi_server_verified',
+    return { decision_id: item.decision_id, authoritative: item.source === 'mi_server_verified',
       content: `${origin}：${label}；地點 ${string(item.place_id,80)}。` }; 
   });
   // This is a newly accessible, actor-scoped record at the time of the
@@ -85,8 +89,16 @@ export function nativeWorldProjection(input, prior = {}, feedback = []) {
   // action, nor objective knowledge of unseen causes. wRITE's existing
   // perception -> attention -> Phase63A memory pipeline, rather than Mi,
   // decides whether to encode this newly read personal record.
-  const verifiedReports = experienceReports.filter(report => report.authoritative);
-  visual.push(...verifiedReports.map(report => `查閱自己的行動紀錄：${report.content}`));
+  const reportsByDecision = new Map(experienceReports.map(item => [item.decision_id, item]));
+  // Canonical Phase76 receipts have a single other-senses channel. Older
+  // verified receipts, created before this migration, retain the read-record
+  // visual channel so that no historical feedback disappears.
+  const phase76DecisionIds = new Set(postOutcomeObservations.map(item => item.decision_id));
+  visual.push(...ownFeedback.filter(item => !phase76DecisionIds.has(item.decision_id) && item.source === 'mi_server_verified')
+    .map(item => {
+      const report = reportsByDecision.get(item.decision_id);
+      return report ? `查閱自己的行動紀錄：${report.content}` : '查閱自己的行動紀錄';
+    }));
   const old = prior && typeof prior === 'object' ? clone(prior) : {};
   const simulationTime = new Date(Date.UTC(2026, 0, 1, 8, 0) + input.world_minute * 60_000).toISOString();
   return {
@@ -99,7 +111,7 @@ export function nativeWorldProjection(input, prior = {}, feedback = []) {
         // Coordinates are an engine-local neutral reference point, not an
         // assertion of real Mi map geometry or through-wall visibility.
         entity_positions: { [actor]: { x: 0, y: 0 } },
-        observable_by: { [actor]: { visual, audible: [], other_senses: [] } },
+        observable_by: { [actor]: { visual, audible: [], other_senses: postOutcomeObservations.flatMap(item => item.observations) } },
       },
     },
     characters: {
@@ -164,7 +176,8 @@ export function validateNativeFeedback(input, selection) {
 function rememberSelection(entry, input, fingerprint, actionId, decisionId) {
   const pending={...entry.pending};
   pending[decisionId]={ actor_id:input.actor_id, world_minute:input.world_minute,
-    action_id:actionId, origin_place_id:input.observer.place_id??null,
+    action_id:actionId, actor_name:input.observer.name,
+    intent: input.actions.find(a=>a.action_id===actionId)?.intent??null, origin_place_id:input.observer.place_id??null,
     target_place_id: actionId.startsWith('go:')?actionId.slice(3):
       input.actions.find(a=>a.action_id===actionId)?.place_id??null,
   };
@@ -218,7 +231,11 @@ export function createNativeBrainBridge({ upstream, decider, memoryRetrievalReso
       snapshot = await upstream.getWorldSimulationState(sessionId, sessionOptions);
     }
     const undelivered=(entry?.feedback||[]).filter(x=>x.actor_id===input.actor_id&&!x.delivered_in&&x.world_minute<=input.world_minute).slice(-8);
-    const projected = nativeWorldProjection(input, snapshot.state, undelivered);
+    const character = `${input.observer.name} (${input.actor_id})`;
+    const canonicalObservations = undelivered.filter(item => item.source === 'mi_server_verified' && item.post_outcome_receipt)
+      .map(item => ({ decision_id: item.decision_id,
+        observations: readMiPhase76Observations(item.post_outcome_receipt, upstream, character) }));
+    const projected = nativeWorldProjection(input, snapshot.state, undelivered, canonicalObservations);
     const eventId = projected.event_queue[0].event_id;
     const priorHistory = await upstream.getWorldSimulationHistory(sessionId, sessionOptions);
     const previous = (priorHistory.turns || []).find(t => t?.event?.event_id === eventId && (t?.selected_action_intents || []).length > 0);
@@ -304,11 +321,16 @@ export function createNativeBrainBridge({ upstream, decider, memoryRetrievalReso
       if(digest({kind:previous.kind,place_id:previous.place_id,world_minute:previous.world_minute})!==digest(reported))
         throw fail('BRAIN_FEEDBACK_CONFLICT','這次決策已有不同的回饋紀錄。');
       if (previous.source !== source) throw fail('BRAIN_FEEDBACK_SOURCE_CONFLICT','回饋來源與先前紀錄不同');
-      return {ok:true,accepted:true,duplicate:true,source};
+      return {ok:true,accepted:true,duplicate:true,source,post_outcome:previous.post_outcome_receipt?'phase76_canonical':'legacy'};
     }
-    entry.feedback=[...(entry.feedback||[]),{...reported,decision_id:input.decision_id,actor_id:input.actor_id,action_id:input.action_id,delivered_in:null,source}].slice(-64);
+    const verified = { ...reported, decision_id: input.decision_id, actor_id: input.actor_id,
+      action_id: input.action_id, delivered_in: null, source };
+    if (source === 'mi_server_verified' && phase76Available(upstream) && selection.actor_name && selection.intent) {
+      verified.post_outcome_receipt = createMiPhase76Receipt({ feedback: verified, selection, upstream });
+    }
+    entry.feedback=[...(entry.feedback||[]),verified].slice(-64);
     await saveIndex(indexFile,index);
-    return {ok:true,accepted:true,duplicate:false,source};
+    return {ok:true,accepted:true,duplicate:false,source,post_outcome:verified.post_outcome_receipt?'phase76_canonical':'legacy'};
   }
   return {
     acknowledge(input){
@@ -325,6 +347,6 @@ export function createNativeBrainBridge({ upstream, decider, memoryRetrievalReso
       lock = current.catch(() => {});
       return current;
     },
-    status: () => ({ upstream: 'wRITE', connected: true, decision_provider: typeof decider === 'function', mode: 'native_turn', durable_session_index: true, authoritative_mi_execution: false, feedback_ingress: true }),
+    status: () => ({ upstream: 'wRITE', connected: true, decision_provider: typeof decider === 'function', mode: 'native_turn', durable_session_index: true, authoritative_mi_execution: false, feedback_ingress: true, phase76: phase76Available(upstream) }),
   };
 }

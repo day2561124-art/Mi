@@ -1,3 +1,2 @@
-import {createServer} from 'node:http';import {readFile,stat} from 'node:fs/promises';import {extname,resolve,sep} from 'node:path';
-const port=Number(process.env.PORT||4173),root=resolve('.');const MIME={'.js':'text/javascript','.html':'text/html','.css':'text/css','.json':'application/json','.svg':'image/svg+xml'};
-createServer(async(req,res)=>{try{const url=new URL(req.url,'http://localhost');const file=resolve(root,decodeURIComponent(url.pathname).replace(/^\/+/,'' )||'index.html');if(file!==root&&!file.startsWith(root+sep)){res.writeHead(403).end();return;}const s=await stat(file);if(!s.isFile()){res.writeHead(404).end();return;}const data=await readFile(file);res.writeHead(200,{'Content-Type':(MIME[extname(file)]||'application/octet-stream')+'; charset=utf-8','Cache-Control':'no-store'});res.end(data);}catch{res.writeHead(404).end('Not found');}}).listen(port,()=>console.log(`Preview at http://localhost:${port}`));
+import {startBrainServer} from '../server/brain-api.mjs';
+await startBrainServer();

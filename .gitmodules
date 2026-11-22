@@ -1,0 +1,3 @@
+[submodule "vendor/wRITE"]
+    path = vendor/wRITE
+    url = https://github.com/day2561124-art/wRITE.git

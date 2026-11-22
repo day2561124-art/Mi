@@ -1,0 +1,20 @@
+name: Upstream Character Brain Integration
+on:
+  push:
+  pull_request:
+jobs:
+  upstream-smoke:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          submodules: true
+          persist-credentials: false
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - run: npm ci
+        working-directory: vendor/wRITE
+      - run: node --test tests/brain-upstream-smoke.test.mjs
+        env:
+          WRITE_ROOT: ${{ github.workspace }}/vendor/wRITE

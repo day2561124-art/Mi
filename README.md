@@ -48,8 +48,8 @@ npm run build        # 產生 dist/ 靜態站點
 
 ## Rebuild 0.2 工程記錄（2026-11-22）
 
-- 新增 `src/core/routes.js` 和 `tests/exploration.test.mjs`、`tests/storage.test.mjs`。
+- 新增 `src/core/routes.js` 和 `tests/exploration.test.mjs`、`tests/storage.test.mjs`、`tests/ui.test.mjs`（模擬 DOM 事件委派流程，並非真實瀏覽器）。
 - 確認與修正：事件不瞬移角色；人物觀察、交流、調查有明確前因；觀察者以實際路徑走訪並保留進房紀錄；v1→v2 存檔遷移；離線與分段推進一致性；日志 ID 唯一。
-- `npm run check`：21/21 測試通過、靜態建置成功。
+- `npm run check`：22/22 測試通過、靜態建置成功。
 - 未完成：取得原站畫面做逐頁比對、前端真實瀏覽器自動化、雲端存檔與完整跨作品事件與角色資料。
 - 安全：不保存／提交任何環境秘密；原 Sites 正式站沒有改動、沒有重新部署。

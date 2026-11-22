@@ -6,7 +6,7 @@ import {findRoute} from './routes.js';
 export function characterActionCatalog(world, actorId) {
  const actor=world.people.find(p=>p.id===actorId);
  if(!actor)return [];
- if(actor.targetId||actor.travel)return [];
+ if(actor.targetId||actor.travel||world.brainOutcomes?.some(r=>r.actorId===actor.id&&r.state==='pending'))return [];
  const actions=[{action_id:'wait',intent:'留在目前地點，觀察周圍',kind:'wait',placeId:actor.placeId}];
  const destinations=[[actor.home,'回家休息','rest'],[actor.work,'前往工作或課程','routine'],[actor.favorite,'去自己喜歡的地點','leisure']];
  for(const [dest,label,kind] of destinations){

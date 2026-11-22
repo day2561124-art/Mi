@@ -84,6 +84,9 @@ test('pinned Native loop receives only server-committed Mi outcome after authori
     const call = (previous, operation_id, type, args) => store.mutate(worldId, {
       operation_id, expected_revision: previous.revision, expected_hash: previous.hash, type, args,
     });
+    // Explicit Native ownership: otherwise legacy routine AI can assign
+    // Conan a new destination during the intervening 30-minute World step.
+    state = await call(state, 'native-mode-on', 'brain_enabled', { enabled: true });
     state = await call(state, 'native-unpause', 'pause', { paused: false });
     const first = await store.decide(worldId, {
       operation_id: 'server-native-decision-1', expected_revision: state.revision,
@@ -113,5 +116,79 @@ test('pinned Native loop receives only server-committed Mi outcome after authori
     });
     assert.equal(third.duplicate, true);
     assert.equal(packets.length, 2);
+  } finally { await rm(root, { recursive: true, force: true }); }
+});
+
+test('real wRITE Native alternates two independent NPC memories and replays only each actor’s verified Mi experience', async t => {
+  if (!process.env.WRITE_ROOT) return t.skip('Real wRITE checkout only on integration CI');
+  const { createWorldStore } = await import('../server/world-store.mjs');
+  const { makeWorld } = await import('../src/core/world.js');
+  const parent = join(process.env.WRITE_ROOT, 'tests', '.tmp');
+  await mkdir(parent, { recursive: true });
+  const root = await mkdtemp(join(parent, 'mi-native-autonomy-'));
+  try {
+    const upstream = await loadNativeRuntime(process.env.WRITE_ROOT);
+    const packets = [];
+    const native = createNativeBrainBridge({
+      upstream,
+      decider: async packet => {
+        packets.push(structuredClone(packet));
+        assert.ok(Array.isArray(packet.candidate_action_intents));
+        assert.equal(Object.hasOwn(packet, 'world_state'), false);
+        assert.ok(packet.candidate_action_intents.some(a => a.action_id === 'wait'));
+        return { action_id: 'wait' };
+      },
+      sessionOptions: { fixtureRoot: join(root, 'upstream') },
+      indexFile: join(root, 'native-index.json'),
+    });
+    const store = createWorldStore({ root: join(root, 'worlds'), brain: native });
+    const source = makeWorld('多角色真實 Native 連續性');
+    source.people = source.people.slice(0, 2);
+    let saved = await store.migrate(source);
+    const id = saved.world.id;
+    const execute = async (operation_id, type, args) => {
+      saved = await store.mutate(id, { operation_id, expected_revision: saved.revision, expected_hash: saved.hash, type, args });
+    };
+    await execute('native-autonomy-enabled', 'brain_enabled', { enabled: true });
+    await execute('native-autonomy-start', 'pause', { paused: false });
+    const tick = async operation_id => {
+      saved = await store.autonomousTick(id, {
+        operation_id, expected_revision: saved.revision, expected_hash: saved.hash,
+        minutes: 30, max_actors: 2,
+      });
+      assert.equal(saved.decisions.length, 2);
+      const report = await store.reconcile(id);
+      assert.equal(report.delivered, 2);
+      saved = report;
+    };
+    await tick('upstream-native-multi-1');
+    assert.equal(packets.length, 2);
+    // Service and Native bridge restarted with same durable on-disk identity.
+    const restarted = createNativeBrainBridge({
+      upstream,
+      decider: async packet => { packets.push(structuredClone(packet)); return { action_id: 'wait' }; },
+      sessionOptions: { fixtureRoot: join(root, 'upstream') },
+      indexFile: join(root, 'native-index.json'),
+    });
+    const resumed = createWorldStore({ root: join(root, 'worlds'), brain: restarted });
+    saved = await resumed.get(id);
+    const second = await resumed.autonomousTick(id, {
+      operation_id: 'upstream-native-multi-2', expected_revision: saved.revision,
+      expected_hash: saved.hash, minutes: 30, max_actors: 2,
+    });
+    assert.equal(second.decisions.length, 2);
+    assert.equal(packets.length, 4);
+    for (const character of source.people) {
+      assert.ok(packets.some(p => p.character === `${character.name} (${character.id})`));
+    }
+    const later = packets.slice(2);
+    assert.ok(later.every(p => JSON.stringify(p).includes('米花伺服器已保存並核對的歷史行動紀錄')));
+    assert.ok(later.every(p => !JSON.stringify(p).includes('本機存檔回報（未經伺服器驗證）')));
+    const index = JSON.parse(await readFile(join(root, 'native-index.json'), 'utf8'));
+    const nativeSession = index.worlds[Object.keys(index.worlds)[0]].session_id;
+    const history = await upstream.getWorldSimulationHistory(nativeSession, { fixtureRoot: join(root, 'upstream') });
+    assert.equal(history.turns.filter(turn => (turn.selected_action_intents || []).length > 0).length, 4);
+    // A returned historical report is NOT being claimed as wRITE's official
+    // Experience Receipt / automatic long-term memory consolidation.
   } finally { await rm(root, { recursive: true, force: true }); }
 });

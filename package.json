@@ -1,7 +1,7 @@
 {
   "name": "beika-stage-rebuild",
   "private": true,
-  "version": "0.6.0",
+  "version": "0.7.0",
   "type": "module",
   "description": "米花大舞台：獨立重作的離線優先觀察模擬器",
   "scripts": {

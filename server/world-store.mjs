@@ -23,10 +23,15 @@ const clientEntry = entry => ({ world: clone(entry.world), revision: entry.revis
 /** Node-only local authority. Never accept a client-supplied replacement World in mutate(). */
 export function createWorldStore({ root = resolve('.beika-private/worlds'), now = () => Date.now(), brain = null } = {}) {
   const directory = resolve(root);
-  let queue = Promise.resolve();
-  function serialized(fn) {
-    const running = queue.catch(() => {}).then(fn);
-    queue = running.catch(() => {});
+  // Each world has an independent queue. A slow/erroring NPC brain for A
+  // must not block valid writes to unrelated world B in the same process.
+  const queues = new Map();
+  function serialized(fn, worldKey = '_world_creation') {
+    const previous = queues.get(worldKey) ?? Promise.resolve();
+    const running = previous.catch(() => {}).then(fn);
+    const tail = running.catch(() => {});
+    queues.set(worldKey, tail);
+    void tail.then(() => { if (queues.get(worldKey) === tail) queues.delete(worldKey); });
     return running;
   }
   const path = id => join(directory, `${assertId(id)}.json`);
@@ -128,7 +133,12 @@ export function createWorldStore({ root = resolve('.beika-private/worlds'), now 
       case 'pause': if (typeof args.paused !== 'boolean') break; return { ...world, paused: args.paused };
       case 'speed': if (![1, 4, 12].includes(args.speed)) break; return { ...world, speed: args.speed };
       case 'canon': if (typeof args.enabled !== 'boolean') break; return { ...world, canonEnabled: args.enabled };
-      case 'brain_enabled': if (typeof args.enabled !== 'boolean') break; return { ...world, brainEnabled: args.enabled };
+      case 'brain_enabled': {
+        if(typeof args.enabled!=='boolean')break;
+        if(args.enabled && (!brain?.status?.().decision_provider||brain?.status?.().mode!=='native_turn'))
+          throw error('BRAIN_SELECTOR_NOT_CONFIGURED','只有完整 Native 決策提供者就緒時才能啟用背景角色腦');
+        return {...world,brainEnabled:args.enabled};
+      }
       default: throw error('WORLD_COMMAND_NOT_ALLOWED', '不支援這種世界操作');
     }
     throw error('INVALID_WORLD_REQUEST', '世界操作參數錯誤');
@@ -140,13 +150,15 @@ export function createWorldStore({ root = resolve('.beika-private/worlds'), now 
       const result = withSavedAt(applyCommand(entry.world, type, args));
       const changed = await commit(entry, operation_id, fingerprint, result);
       return { ...clientEntry(changed), duplicate: false };
-    });
+    }, id);
   }
   async function decide(id, { operation_id, expected_revision, expected_hash, actor_id }) {
     return serialized(async () => {
       const entry = await read(id), fingerprint = checksum({ type: 'brain_decide', actor_id });
       if (checkOperation(entry, operation_id, fingerprint, expected_revision, expected_hash)) return { ...clientEntry(entry), duplicate: true };
       if (!brain?.status?.().decision_provider) throw error('BRAIN_SELECTOR_NOT_CONFIGURED', '原生角色腦決策提供者尚未設定');
+      if (brain?.status?.().mode === 'native_turn' && entry.world.brainEnabled !== true)
+        throw error('AUTONOMY_DISABLED', '原生角色腦決策前，必須明確啟用 Native 模式');
       const packet = { ...makeBoundedBrainRequest(entry.world, actor_id), world_id: serverLineage(id) };
       if (!packet.actions.length) throw error('NO_WORLD_CANDIDATES', '角色目前沒有可以執行的候選行動');
       const selected = await brain.decide(packet);
@@ -155,7 +167,62 @@ export function createWorldStore({ root = resolve('.beika-private/worlds'), now 
         : clone(entry.world);
       const changed = await commit(entry, operation_id, fingerprint, withSavedAt(next));
       return { ...clientEntry(changed), decision: { status: selected?.status, action_id: selected?.action_id ?? null }, duplicate: false };
-    });
+    }, id);
+  }
+  /** Bounded round-robin multi-NPC step. Only the server may select the World state
+   * and apply the consequences; Native chooses intents through its own runtime. */
+  async function autonomousTick(id, {
+    operation_id, expected_revision, expected_hash, minutes = 10, max_actors = 3,
+  } = {}) {
+    return serialized(async () => {
+      const entry = await read(id);
+      const fingerprint = checksum({ type: 'native_autonomy_tick', minutes, max_actors });
+      if (checkOperation(entry, operation_id, fingerprint, expected_revision, expected_hash)) {
+        return { ...clientEntry(entry), duplicate: true, decisions: [], failures: [] };
+      }
+      if (!Number.isSafeInteger(minutes) || minutes < 1 || minutes > 120
+          || !Number.isSafeInteger(max_actors) || max_actors < 1 || max_actors > 4)
+        throw error('INVALID_AUTONOMY_STEP', '角色背景回合超出允許時間或角色數量');
+      if (entry.world.paused || entry.world.brainEnabled !== true)
+        throw error('AUTONOMY_DISABLED', '世界已暫停或未啟用原生角色腦');
+      if (brain?.status?.().mode !== 'native_turn' || brain?.status?.().decision_provider !== true)
+        throw error('BRAIN_SELECTOR_NOT_CONFIGURED', '角色決策提供者未就緒');
+      let next = clone(entry.world);
+      const people = next.people;
+      const priorCursor = next.metadata?.nativeCursor;
+      const start = people.length && Number.isSafeInteger(priorCursor) && priorCursor >= 0
+        ? priorCursor % people.length : 0;
+      const decisions = [], failures = [];
+      let visited = 0;
+      while (visited < people.length && decisions.length < max_actors) {
+        const actor = people[(start + visited) % people.length];
+        visited++;
+        // A prior action must settle before another Brain choice. This also
+        // avoids rerunning cognition for actors that are still on the road.
+        if (actor.targetId || actor.travel || next.brainOutcomes?.some(r =>
+          r.actorId === actor.id && r.state === 'pending')) continue;
+        const request = makeBoundedBrainRequest(next, actor.id);
+        if (!request.actions.length) continue;
+        try {
+          const selected = await brain.decide({ ...request, world_id: serverLineage(id) });
+          if (selected?.status !== 'selected' || !selected.action_id) continue;
+          if (selected.committed !== true || selected.actor_id !== actor.id || selected.world_minute !== next.minutes
+              || !/^[a-f0-9]{64}$/.test(selected.decision_id ?? ''))
+            throw error('BRAIN_RESPONSE_INVALID', '角色決策身分、時間或憑證不符合目前世界');
+          // applyBrainDecision rechecks the exact World-available candidate.
+          next = applyBrainDecision(next, actor.id, selected.action_id, selected.decision_id);
+          decisions.push({ actor_id: actor.id, action_id: selected.action_id,
+            decision_id: selected.decision_id });
+        } catch (e) {
+          // One NPC provider failure must not stop other actors or World time.
+          failures.push({ actor_id: actor.id, code: String(e?.code || 'BRAIN_PROVIDER_FAILED').slice(0, 80) });
+        }
+      }
+      next.metadata = { ...next.metadata, nativeCursor: people.length ? (start + visited) % people.length : 0 };
+      next = withSavedAt(advanceWorld(next, minutes));
+      const committed = await commit(entry, operation_id, fingerprint, next);
+      return { ...clientEntry(committed), duplicate: false, decisions, failures };
+    }, id);
   }
   /** Feed only server-stored, engine-settled facts to the Native adapter. */
   async function reconcile(id) {
@@ -173,7 +240,7 @@ export function createWorldStore({ root = resolve('.beika-private/worlds'), now 
         } catch { break; /* Persisted ready records remain available for retry. */ }
       }
       return { ...clientEntry(entry), delivered };
-    });
+    }, id);
   }
-  return { create, migrate, get, list, mutate, decide, reconcile };
+  return { create, migrate, get, list, mutate, decide, autonomousTick, reconcile };
 }

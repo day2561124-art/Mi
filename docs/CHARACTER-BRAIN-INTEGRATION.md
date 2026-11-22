@@ -110,3 +110,14 @@ Native session 對應表只保存在伺服器的 `.beika-private/brain-native-in
 ### 安全與尚未完成
 
 此模式**僅為單一可信使用者的 localhost 預覽**，**不是可上公網的多人或雲端服務**：沒有帳號登入、持有人授權、資料加密、跨伺服器檔案鎖、跨裝置同步及完整備份回復；同一資料夾不可由多個 Node 程序同時寫入。正式公開之前必須先實作隔離、認證、備份與依賴安全稽核。原 Sites 仍獨立且未修改。
+
+
+## Rebuild 0.7：Node 背景 Native 多角色排程
+
+`server/world-scheduler.mjs` 在 `BRAIN_NATIVE=1` 且設定 `BRAIN_SELECTOR_MODULE` 時啟動。每輪從各世界的伺服器存檔讀取最新版本，按照世界與 NPC 的輪替順序，向同一固定版上游發送**各自隔離的感知**，並把合法、已提交的 action ID 交回 `server/world-store.mjs` 執行。世界真相從不交給角色選擇器。單輪每個世界最多三個 NPC；一次 World 時間差最多補 120 遊戲分鐘，避免模型延遲使負荷失控。
+
+使用 `src/core/world.js` 的合法路網與物理步進；新目標僅由 Native 策略提出。等待中或已上路的角色不會重新思考另一個目的地。世界採獨立序列化佇列，並行推進不同世界，任一 NPC 的 provider 錯誤不會阻斷其他人。`brainOutcomes` 仍從伺服器 World 的實際結果產生，先經 `reconcile` 接收並驗證，再由 Native 在新回合重新理解。還不等於 wRITE 正式權威 Experience Receipt，不應當成長期記憶已生成的證據。
+
+前端在伺服器 Native 模式切換為唯讀輪詢進度，避免瀏覽器另外送 `advance` 和單角色決策，與背景排程競逐。如果選擇器服務下線，可在畫面中關閉已啟用的 Native 模式，重新使用原本的作息規則；**不能悄悄替尚未完成的角色腦決策選擇成功結果**。
+
+尚需完成：跨伺服器共享鎖和持久化工作排程、正式上游 Experience Receipt 與 learning 生命週期、崩潰前後的跨系統雙提交對帳、雲端使用者身份與授權、多設備同步及上游依賴安全審核。原 Sites 正式站保持獨立。

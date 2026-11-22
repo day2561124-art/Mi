@@ -118,9 +118,15 @@ function progressActor(world,actor,tick){
  // unless physically present or a nearby character passes on a rumor.
  if(noticeScene(world,actor))return;
  const directed=actor.intent?.type==='investigate'&&actor.intent.signalId?`lead:${actor.intent.placeId}:${actor.intent.signalId}`:null;
- const lead=directed&&actor.facts.includes(directed)?directed:pendingLead(actor);
+ const lead=directed&&actor.facts.includes(directed)?directed:(world.brainEnabled?null:pendingLead(actor));
  if(lead&&lead.slice(5).split(':')[0]===actor.placeId&&actor.curiosity>=65){investigate(world,actor,lead);return;}
  actor.energy=Math.max(0,actor.energy-2);actor.social=Math.max(0,actor.social-1);
+ // In Native mode the World owns physics/needs/perception, but never chooses
+ // an NPC's new destination or inquiry on behalf of the Character Brain.
+ if(world.brainEnabled){
+  if(actor.intent?.type==='observe')actor.activity='正在留意周圍';
+  return;
+ }
  const others=world.people.filter(p=>p.id!==actor.id&&p.placeId===actor.placeId&&!p.targetId);
  const rnd=randomAt(world,actor,tick);
  if(others.length&&rnd>.64&&actor.social<90){meet(world,actor,others[Math.floor(rnd*others.length)]);return;}

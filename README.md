@@ -104,8 +104,13 @@ npm run build        # 產生 dist/ 靜態站點
 驗證：`npm run check`，以及 GitHub 上游流程實際拉取固定版 `vendor/wRITE` 執行原生多角色回合測試（本機沒有子模組時測試必須跳過而不能冒稱通過）。
 
 
-## Rebuild 0.8：正式主觀記憶形成入口
+## Rebuild 0.8：已驗證後果進入 wRITE 正式主觀記憶形成入口
 
-已由伺服器確認的角色個人行動結果，於下一回合成為該 NPC 可查閱的個人紀錄，由真正 wRITE Native Phase63A 決定是否編碼為主觀記憶。米花不自行寫入上游 memories。舊版瀏覽器自報結果仍只屬猜測；不同角色的紀錄不互通。
+- 伺服器確實提交的個人行動結果，在**下一個該角色的原生回合**作為可閱讀的個人歷史紀錄進入 `observable_by[character].visual`，由 wRITE 正式感知與 Phase63A 主觀記憶形成流程決定是否編碼。米花**不直接修改** wRITE 的 `memories`、自我模型或信念。
+- 原本來自瀏覽器本機存檔、未經權威伺服器核實的回報仍只能留在 `guessed`，不會升級成上述已驗證的感知紀錄。不同角色的紀錄先按 `actor_id` 隔離；不讓路過的 NPC 知道別人的行動紀錄。
+- 新增真實上游 CI 斷言：伺服器世界先產生經驗 → 完成 wRITE 下一個原生回合 → 上游提交新主觀記憶紀錄；另驗證兩人經驗不混用。測試失敗則不可聲稱 Native 學習驗收完成。
+- **已形成主觀記憶 ≠ 自動證明檢索、語義學習或 wRITE 官方 post-outcome Experience Receipt 已完成。** 須另測實際 Phase63C 取回、目標/決策差異與 Phase76 內建的 post-outcome 主觀經驗接線。伺服器尚未具備公網多人安全條件。
 
-新增真實上游測試驗證主觀記憶是否落盤；未通過不得視作完成。這還不等於 Phase63C 真正記憶取回、語義學習或 wRITE 原生 post-outcome Experience Receipt 已驗證。不可公開部署未經授權的 Node 伺服器。
+## Rebuild 0.9：Phase63C 已有來源的經驗取回
+
+`server/memory-retrieval.mjs` 將固定版上游已有的 Phase63C `memoryRetrievalResolver` 接入 Mi Native Loop。它只選取原生 Phase63A 已經編碼、符合下一步思考目標的本角色伺服器驗證行動紀錄；取回由上游執行，不能作者式補寫回憶，也不能把臨時讀取冒充記憶取回。上游 CI 新增已形成記憶但禁止檢索，與允許真實檢索後的第三回合選擇對照。這只是狹義的記憶取回功能，非 Phase76 全面知識學習或長期記憶鞏固。

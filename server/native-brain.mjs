@@ -1,3 +1,4 @@
+import { createMiMemoryRetrievalResolver } from './memory-retrieval.mjs';
 import { createHash } from 'node:crypto';
 import { mkdir, readFile, rename, writeFile } from 'node:fs/promises';
 import { dirname, join, resolve } from 'node:path';
@@ -77,10 +78,13 @@ export function nativeWorldProjection(input, prior = {}, feedback = []) {
       ? '米花伺服器已保存並核對的歷史行動紀錄（供角色重新理解，並不自動等於已形成長期記憶）'
       : '本機存檔回報（未經伺服器驗證）';
     return { authoritative: item.source === 'mi_server_verified',
-      content: `${origin}：${label}；地點 ${string(item.place_id,80)}。` };
+      content: `${origin}：${label}；地點 ${string(item.place_id,80)}。` }; 
   });
-  // A newly read private record in this actor's NEXT turn. Native Phase63A,
-  // not Mi, determines if and how it becomes a subjective memory.
+  // This is a newly accessible, actor-scoped record at the time of the
+  // next observation. It is not retroactive perception of the original
+  // action, nor objective knowledge of unseen causes. wRITE's existing
+  // perception -> attention -> Phase63A memory pipeline, rather than Mi,
+  // decides whether to encode this newly read personal record.
   const verifiedReports = experienceReports.filter(report => report.authoritative);
   visual.push(...verifiedReports.map(report => `查閱自己的行動紀錄：${report.content}`));
   const old = prior && typeof prior === 'object' ? clone(prior) : {};
@@ -103,7 +107,8 @@ export function nativeWorldProjection(input, prior = {}, feedback = []) {
       [actor]: {
         ...(old.characters?.[actor] || {}),
         known: observer.known,
-        // Unverified browser reports remain guesses, never observed evidence.
+        // Unverified browser reports stay guesses; verified records are
+        // separate observable input, eligible for native memory formation.
         guessed: [...observer.uncertain, ...experienceReports.filter(report => !report.authoritative).map(report => report.content)].slice(-24),
         current_goal: old.characters?.[actor]?.current_goal || '依自己掌握的資訊安排下一步',
         needs: { energy: observer.energy ?? null, social: observer.social ?? null },
@@ -169,7 +174,7 @@ function rememberSelection(entry, input, fingerprint, actionId, decisionId) {
 }
 
 /** One serial native turn per server process; wRITE owns its own durable history. */
-export function createNativeBrainBridge({ upstream, decider, sessionOptions = {}, indexFile = resolve('.beika-private/brain-native-index.json') }) {
+export function createNativeBrainBridge({ upstream, decider, memoryRetrievalResolver = createMiMemoryRetrievalResolver(), sessionOptions = {}, indexFile = resolve('.beika-private/brain-native-index.json') }) {
   for (const name of ['beginWorldSimulationSession', 'runWorldSimulationTurn', 'createWorldSimulationCharacterRuntimeManager', 'getWorldSimulationState', 'getWorldSimulationHistory', 'commitWorldSimulationTurn']) {
     if (typeof upstream?.[name] !== 'function') throw fail('NATIVE_RUNTIME_INCOMPATIBLE', `缺少上游入口 ${name}`);
   }
@@ -248,6 +253,7 @@ export function createNativeBrainBridge({ upstream, decider, sessionOptions = {}
     const outcome = await upstream.runWorldSimulationTurn({ world_simulation_session_id: sessionId, event_id: eventId }, {
       ...sessionOptions,
       characterRuntimeManager: runtimeManager,
+      memoryRetrievalResolver,
       characterBrain: async packet => {
         // The upstream Native cognition (with its own committed memory and
         // experience reentry) builds this packet. An external provider only

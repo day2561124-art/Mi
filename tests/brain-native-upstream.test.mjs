@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdtemp, mkdir, rm } from 'node:fs/promises';
+import { mkdtemp, mkdir, rm, readFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { makeWorld } from '../src/core/world.js';
 import { makeBoundedBrainRequest } from '../src/core/brain-bridge.js';
@@ -31,12 +31,24 @@ test('pinned wRITE Native Loop executes two committed turns with durable experie
     const first = await native.decide(makeBoundedBrainRequest(world, 'conan'));
     assert.equal(first.committed, true);
     assert.equal(first.action_id, 'wait');
+    // Recreate the bridge as if Node restarted; it must reconnect to the
+    // already persisted Native world lineage through the private index.
+    const restarted = createNativeBrainBridge({
+      upstream: runtime,
+      decider: async packet => { packets.push(packet); return { action_id: 'wait' }; },
+      sessionOptions: { fixtureRoot: join(root, 'upstream') },
+      indexFile: join(root, 'private-index.json'),
+    });
     world.minutes = 30;
-    const second = await native.decide(makeBoundedBrainRequest(world, 'conan'));
+    const second = await restarted.decide(makeBoundedBrainRequest(world, 'conan'));
     assert.equal(second.committed, true);
     assert.equal(second.action_id, 'wait');
     assert.equal(packets.length, 2);
-    const again = await native.decide(makeBoundedBrainRequest(world, 'conan'));
+    const index = JSON.parse(await readFile(join(root, 'private-index.json'), 'utf8'));
+    const sessionId = index.worlds[world.id].session_id;
+    const history = await runtime.getWorldSimulationHistory(sessionId, { fixtureRoot: join(root, 'upstream') });
+    assert.equal(history.turns.filter(turn => (turn.selected_action_intents || []).length > 0).length, 2);
+    const again = await restarted.decide(makeBoundedBrainRequest(world, 'conan'));
     assert.equal(again.action_id, 'wait');
     assert.equal(packets.length, 2);
   } finally { await rm(root, { recursive: true, force: true }); }

@@ -84,6 +84,9 @@ test('pinned Native loop receives only server-committed Mi outcome after authori
     const call = (previous, operation_id, type, args) => store.mutate(worldId, {
       operation_id, expected_revision: previous.revision, expected_hash: previous.hash, type, args,
     });
+    // Explicit Native ownership: otherwise legacy routine AI can assign
+    // Conan a new destination during the intervening 30-minute World step.
+    state = await call(state, 'native-mode-on', 'brain_enabled', { enabled: true });
     state = await call(state, 'native-unpause', 'pause', { paused: false });
     const first = await store.decide(worldId, {
       operation_id: 'server-native-decision-1', expected_revision: state.revision,

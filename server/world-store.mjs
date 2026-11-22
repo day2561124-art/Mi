@@ -157,6 +157,8 @@ export function createWorldStore({ root = resolve('.beika-private/worlds'), now 
       const entry = await read(id), fingerprint = checksum({ type: 'brain_decide', actor_id });
       if (checkOperation(entry, operation_id, fingerprint, expected_revision, expected_hash)) return { ...clientEntry(entry), duplicate: true };
       if (!brain?.status?.().decision_provider) throw error('BRAIN_SELECTOR_NOT_CONFIGURED', '原生角色腦決策提供者尚未設定');
+      if (brain?.status?.().mode === 'native_turn' && entry.world.brainEnabled !== true)
+        throw error('AUTONOMY_DISABLED', '原生角色腦決策前，必須明確啟用 Native 模式');
       const packet = { ...makeBoundedBrainRequest(entry.world, actor_id), world_id: serverLineage(id) };
       if (!packet.actions.length) throw error('NO_WORLD_CANDIDATES', '角色目前沒有可以執行的候選行動');
       const selected = await brain.decide(packet);

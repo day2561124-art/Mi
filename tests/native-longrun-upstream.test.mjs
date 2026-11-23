@@ -175,6 +175,19 @@ test('real pinned Native: three independent NPC memories and receipts survive re
       assert.equal([...memorySets[a]].some(x=>memorySets[b].has(x)),false,'cross-NPC memory leakage');
     const history=await upstream.getWorldSimulationHistory(lineage.session_id,options);
     assert.equal(history.turns.filter(t=>(t.selected_action_intents??[]).length>0).length,ticks*3);
+    // Diagnostic is after timed/sampled ticks and reads only already fetched
+    // committed history. Never log private history or character memory content.
+    const qHistoryCount=history.turns.filter(turn=>
+      turn?.counterfactual_linked_experience_reuse_outcome_selected_action_outcome_evidence &&
+      typeof turn.counterfactual_linked_experience_reuse_outcome_selected_action_outcome_evidence==='object').length;
+    const qWithRecords=history.turns.filter(turn=>
+      (turn?.counterfactual_linked_experience_reuse_outcome_selected_action_outcome_evidence
+        ?.evidence_records?.length??0)>0).length;
+    console.log('BEIKA_NATIVE_Q_DENSITY',JSON.stringify({
+      turns:history.turns.length,phase81qProjections:qHistoryCount,
+      phase81qWithEvidence:qWithRecords,
+      noPriorQFastPathPotential:qHistoryCount===0}));
+
     const audit=await store.auditReconciliation(id);
     assert.equal(audit.ready,0);
     assert.deepEqual(audit.issues,[]);

@@ -103,3 +103,31 @@ test('after upstream source removal, truncated or altered private history is rej
   await assert.rejects(ensureOwnedNativeSessions(input),{code:'NATIVE_MIGRATION_CONFLICT'});
  });
 });
+
+test('orphaned private Native session without a migration receipt fails closed',async()=>{
+ await fixture(async x=>{
+  const input={upstreamRoot:x.upstreamRoot,privateRoot:x.privateRoot,indexFile:x.indexFile};
+  await ensureOwnedNativeSessions(input);
+  const target=join(x.privateRoot,'agent_runs',id);
+  await rm(join(x.privateRoot,'.mi-migration-receipts',id+'.json'));
+  await rm(x.source,{recursive:true,force:true});
+  await assert.rejects(ensureOwnedNativeSessions(input),{code:'NATIVE_MIGRATION_CONFLICT'});
+  assert.equal(JSON.parse(await readFile(join(target,'world_state.json'),'utf8')).revision,2);
+ });
+});
+
+test('explicit Native mode never silently falls back when upstream fails to load',async()=>{
+ await fixture(async x=>{
+  const {startBrainServer}=await import('../server/brain-api.mjs');
+  const previous=process.env.WRITE_DATA_ROOT;
+  try {
+   await assert.rejects(startBrainServer({
+    BRAIN_NATIVE:'1',WRITE_ROOT:x.upstreamRoot,
+    BRAIN_INDEX_FILE:x.indexFile,MI_WRITE_DATA_ROOT:x.privateRoot,PORT:'0'
+   }),/Cannot find module|ERR_MODULE_NOT_FOUND/);
+  }finally {
+   if(previous===undefined)delete process.env.WRITE_DATA_ROOT;
+   else process.env.WRITE_DATA_ROOT=previous;
+  }
+ });
+});

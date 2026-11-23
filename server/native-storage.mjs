@@ -110,6 +110,8 @@ export async function ensureOwnedNativeSessions({upstreamRoot,privateRoot,indexF
     }else if(hasOld){
      if(original!==current)throw fail('NATIVE_MIGRATION_CONFLICT','缺少遷移證明且新舊存檔不一致。');
      await saveMigrationReceipt(receiptFile,id,original,source);
+    }else{
+     throw fail('NATIVE_MIGRATION_CONFLICT','舊來源已消失，但私有世界缺少可核對的遷移證明。');
     }
     existing++;continue;
    }

@@ -4,6 +4,7 @@ import {extname,resolve,sep} from 'node:path';
 import {pathToFileURL} from 'node:url';
 import {loadWriteRuntime,createBrainBridge,loadLocalDecider} from './upstream-brain.mjs';
 import {loadNativeRuntime,createNativeBrainBridge} from './native-brain.mjs';
+import {ensureOwnedNativeSessions} from './native-storage.mjs';
 import {createWorldStore} from './world-store.mjs';
 import {createWorldAutonomyScheduler} from './world-scheduler.mjs';
 const MIME={'.js':'text/javascript','.html':'text/html','.css':'text/css','.json':'application/json','.svg':'image/svg+xml'};
@@ -85,10 +86,18 @@ export async function startBrainServer(env=process.env){
  const port=Number(env.PORT||4173);
  let bridge=null;
  try{
+  const upstreamRoot=resolve(env.WRITE_ROOT||'vendor/wRITE');
+  const privateRoot=resolve(env.MI_WRITE_DATA_ROOT||'.beika-private/write-data');
+  const indexFile=resolve(env.BRAIN_INDEX_FILE||'.beika-private/brain-native-index.json');
+  // Must be set before dynamically importing any upstream module.
+  if(env.BRAIN_NATIVE==='1')await ensureOwnedNativeSessions({upstreamRoot,privateRoot,indexFile});
+  if(process.env.WRITE_DATA_ROOT&&resolve(process.env.WRITE_DATA_ROOT)!==privateRoot)
+   throw Object.assign(new Error('米花角色腦資料目錄衝突。'),{code:'NATIVE_DATA_ROOT_CONFLICT'});
+  process.env.WRITE_DATA_ROOT=privateRoot;
   const chooser=await loadLocalDecider(env);
   if(env.BRAIN_NATIVE==='1'){
    const runtime=await loadNativeRuntime(env.WRITE_ROOT);
-   bridge=createNativeBrainBridge({upstream:runtime,decider:chooser,indexFile:env.BRAIN_INDEX_FILE||resolve('.beika-private/brain-native-index.json')});
+   bridge=createNativeBrainBridge({upstream:runtime,decider:chooser,indexFile});
   }else{
    const runtime=await loadWriteRuntime(env.WRITE_ROOT);
    bridge=createBrainBridge({upstream:runtime,decider:chooser});

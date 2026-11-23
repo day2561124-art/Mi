@@ -1,0 +1,86 @@
+import {createHash,randomUUID} from 'node:crypto';
+import {cp,copyFile,lstat,mkdir,open,readFile,readdir,rename,rm} from 'node:fs/promises';
+import {constants} from 'node:fs';
+import {dirname,join,relative,resolve} from 'node:path';
+
+const sessionPattern=/^agent_run_\d{8}-\d{6}-[a-f0-9]{8}$/;
+const fail=(code,message)=>Object.assign(new Error(message),{code});
+const hash=b=>createHash('sha256').update(b).digest('hex');
+const inside=(a,b)=>{const r=relative(a,b);return r===''||(!r.startsWith('..')&&!r.startsWith('/')&&!r.includes('..'+requireSeparator()));};
+const requireSeparator=()=>process.platform==='win32'?'\\':'/';
+async function exists(p){try{await lstat(p);return true;}catch(e){if(e.code==='ENOENT')return false;throw e;}}
+async function inventory(root){
+ const files={};
+ async function walk(dir){
+  for(const ent of await readdir(dir,{withFileTypes:true})){
+   const p=join(dir,ent.name),st=await lstat(p);
+   if(st.isSymbolicLink())throw fail('NATIVE_MIGRATION_LINK','拒絕搬移含符號連結的角色腦資料。');
+   if(st.isDirectory())await walk(p);
+   else if(st.isFile())files[relative(root,p)]=hash(await readFile(p));
+   else throw fail('NATIVE_MIGRATION_FILE','角色腦資料含不支援的項目。');
+  }
+ }
+ await walk(root);return JSON.stringify(Object.entries(files).sort());
+}
+async function verified(dir,id){
+ const names=['run.json','world_state.json','world_history.json'];
+ const [run,state,history]=await Promise.all(names.map(n=>readFile(join(dir,n),'utf8').then(JSON.parse)));
+ if(run.run_id!==id||state.world_simulation_session_id!==id||history.world_simulation_session_id!==id)
+  throw fail('NATIVE_MIGRATION_LINEAGE','角色腦世界回合身分不一致。');
+ return inventory(dir);
+}
+async function copyExact(source,target){
+ const data=await readFile(source);await mkdir(dirname(target),{recursive:true});
+ try{await copyFile(source,target,constants.COPYFILE_EXCL);}
+ catch(e){if(e.code!=='EEXIST')throw e;}
+ if(hash(await readFile(target))!==hash(data))throw fail('NATIVE_MIGRATION_CONFLICT','角色腦輔助紀錄不一致。');
+}
+export async function ensureOwnedNativeSessions({upstreamRoot,privateRoot,indexFile}){
+ const from=resolve(upstreamRoot),to=resolve(privateRoot),index=resolve(indexFile);
+ if(inside(from,to)||inside(to,from))throw fail('NATIVE_DATA_ROOT_INVALID','米花角色腦資料目錄不可與上游程式碼重疊。');
+ let raw;try{raw=await readFile(index,'utf8');}catch(e){if(e.code==='ENOENT')return {migrated:0,existing:0};throw e;}
+ const saved=JSON.parse(raw);
+ if(saved.version!==1||!saved.worlds||typeof saved.worlds!=='object'||Array.isArray(saved.worlds))
+  throw fail('NATIVE_MIGRATION_INDEX','角色腦索引格式無效。');
+ const ids=[...new Set(Object.values(saved.worlds).map(w=>w?.session_id).filter(Boolean))];
+ if(ids.some(id=>typeof id!=='string'||!sessionPattern.test(id)))throw fail('NATIVE_MIGRATION_LINEAGE','索引存在無效的回合識別。');
+ if(!ids.length)return {migrated:0,existing:0};
+ await mkdir(to,{recursive:true});
+ const lock=join(to,'.migration.lock');
+ let handle;try{handle=await open(lock,'wx',0o600);}
+ catch(e){if(e.code==='EEXIST')throw fail('NATIVE_MIGRATION_BUSY','遷移上鎖，拒絕同時處理。');throw e;}
+ let migrated=0,existing=0;
+ try{
+  for(const id of ids){
+   const source=join(from,'data','agent_runs',id),target=join(to,'agent_runs',id);
+   const hasOld=await exists(source),hasNew=await exists(target);
+   if(!hasOld&&!hasNew)throw fail('NATIVE_MIGRATION_MISSING','舊角色腦存檔遺失，拒絕建立替代回合。');
+   const original=hasOld?await verified(source,id):null;
+   if(hasNew){
+    if(original!==null&&original!==await verified(target,id))throw fail('NATIVE_MIGRATION_CONFLICT','存檔與已搬移版本衝突。');
+    if(original===null)await verified(target,id);
+    existing++;continue;
+   }
+   await mkdir(dirname(target),{recursive:true});
+   const stage=target+'.migration-'+randomUUID();
+   try{
+    await cp(source,stage,{recursive:true,dereference:false,force:false,errorOnExist:true});
+    if(original!==await verified(stage,id))throw fail('NATIVE_MIGRATION_VERIFY','搬移後雜湊不一致。');
+    if(await exists(target))throw fail('NATIVE_MIGRATION_CONFLICT','目的地已被其他程序建立。');
+    await rename(stage,target);
+    migrated++;
+   }finally{await rm(stage,{recursive:true,force:true}).catch(()=>{});}
+  }
+  const traces=join(from,'data','agent_runs','neural_traces');
+  if(await exists(traces)){
+   for(const name of await readdir(traces)){
+    if(!/^neural_trace_[\w-]+\.json$/.test(name))continue;
+    const f=join(traces,name),st=await lstat(f);
+    if(!st.isFile()||st.isSymbolicLink())throw fail('NATIVE_MIGRATION_FILE','上游軌跡不是一般檔案。');
+    const record=JSON.parse(await readFile(f,'utf8'));
+    if(ids.includes(record.run_id))await copyExact(f,join(to,'agent_runs','neural_traces',name));
+   }
+  }
+  return {migrated,existing};
+ }finally{await handle.close();await rm(lock,{force:true});}
+}

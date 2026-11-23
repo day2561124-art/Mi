@@ -283,7 +283,15 @@ test('real Phase63C controlled contrast: the same later decision changes only wh
       // opportunity must not receive a fresh event with identical text.
       await mutate('phase63c-progress-2','advance',{minutes:30,manual:true});
       const before=packets.length;
-      await decide(3);
+      // This is an isolated Phase63C cognition contrast, not an additional
+      // authoritative Mi World action. The second action is deliberately
+      // unacknowledged, so World correctly prohibits a new World decision.
+      // Invoke only the Native decision probe at the same saved clock without
+      // mutating Mi's World state or declaring the prior action successful.
+      const thirdInput={...makeBoundedBrainRequest(saved.world,'conan'),
+        world_id:Object.keys(index.worlds)[0]};
+      const third=await native.decide(thirdInput);
+      assert.equal(third.committed,true);
       assert.equal(packets.length,before+1);
       assert.equal(JSON.stringify(packets[2].perception??{}).includes(MI_PHASE76_EXPERIENCE),false,
         'This third decision must be grounded in memory retrieval, not the record being read again');

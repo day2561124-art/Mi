@@ -42,6 +42,14 @@ test('real pinned Native: three independent NPC memories and receipts survive re
   await fixture('mi-native-endurance-',async root=>{
     const native=await loadNativeRuntime(process.env.WRITE_ROOT);
     const phaseStats={};
+    const callbackStats={selector:{calls:0,ms:0},retrieval:{calls:0,ms:0}};
+    const tickTimes=[];
+    const retrievalResolver=createMiMemoryRetrievalResolver();
+    const timedRetrieval=async (...args)=>{
+      const started=performance.now();
+      try{return await retrievalResolver(...args);}
+      finally{callbackStats.retrieval.calls++;callbackStats.retrieval.ms+=performance.now()-started;}
+    };
     const upstream={...native};
     for(const name of ['beginWorldSimulationSession','getWorldSimulationState',
       'getWorldSimulationHistory','commitWorldSimulationTurn','runWorldSimulationTurn']){
@@ -58,12 +66,16 @@ test('real pinned Native: three independent NPC memories and receipts survive re
     const indexFile=join(root,'index.json'),options={fixtureRoot:join(root,'upstream')};
     const worldRoot=join(root,'worlds'),packets=[];
     const makeBrain=()=>createNativeBrainBridge({upstream,indexFile,sessionOptions:options,
+      memoryRetrievalResolver:timedRetrieval,
       decider:async packet=>{
-        packets.push(structuredClone(packet));
-        assert.equal(Object.hasOwn(packet,'world_state'),false);
-        assert.equal(Object.hasOwn(packet,'world_simulation_session_id'),false);
-        assert.ok(packet.candidate_action_intents.some(x=>x.action_id==='wait'));
-        return {action_id:'wait'};
+        const started=performance.now();
+        try{
+          packets.push(structuredClone(packet));
+          assert.equal(Object.hasOwn(packet,'world_state'),false);
+          assert.equal(Object.hasOwn(packet,'world_simulation_session_id'),false);
+          assert.ok(packet.candidate_action_intents.some(x=>x.action_id==='wait'));
+          return {action_id:'wait'};
+        }finally{callbackStats.selector.calls++;callbackStats.selector.ms+=performance.now()-started;}
       },
     });
     let store=createWorldStore({root:worldRoot,brain:makeBrain()});
@@ -71,8 +83,10 @@ test('real pinned Native: three independent NPC memories and receipts survive re
     const ids=new Set();
     let restarts=0;
     for(let i=0;i<ticks;i++){
-      const tickStart=Date.now();
+      const tickStart=performance.now();
       const preceding=structuredClone(phaseStats);
+      const priorCallbacks=structuredClone(callbackStats);
+      const cpuStart=process.cpuUsage();
       console.log('BEIKA_NATIVE_TICK_START',JSON.stringify({tick:i+1,total:ticks}));
       if(i&&i%3===0){
         store=createWorldStore({root:worldRoot,brain:makeBrain()});
@@ -111,10 +125,33 @@ test('real pinned Native: three independent NPC memories and receipts survive re
       }
       if(i>0)assert.ok(packets.slice(i*3,(i+1)*3).every(p=>
         JSON.stringify(p).includes('post_outcome_action_experience')));
+      const elapsedMs=Math.round(performance.now()-tickStart);
+      tickTimes.push(elapsedMs);
       const profile=Object.fromEntries(Object.entries(phaseStats).map(([name,item])=>[name,{
         calls:item.calls-(preceding[name]?.calls??0),ms:item.ms-(preceding[name]?.ms??0)}]));
-      console.log('BEIKA_NATIVE_PHASE_TIMES',JSON.stringify({tick:i+1,elapsedMs:Date.now()-tickStart,profile}));
-      console.log('BEIKA_NATIVE_TICK_DONE',JSON.stringify({tick:i+1,worldMinutes:saved.world.minutes,elapsedMs:Date.now()-tickStart}));
+      const callbacks=Object.fromEntries(Object.entries(callbackStats).map(([name,item])=>[name,{
+        calls:item.calls-(priorCallbacks[name]?.calls??0),
+        ms:Math.round(item.ms-(priorCallbacks[name]?.ms??0))}]));
+      const cpu=process.cpuUsage(cpuStart);
+      const stateBytes=Buffer.byteLength(JSON.stringify(state.state));
+      const memoryCount=people.reduce((total,person)=>total+
+        (state.state.memories?.[actorName(person)]??[]).length,0);
+      console.log('BEIKA_NATIVE_PHASE_TIMES',JSON.stringify({tick:i+1,elapsedMs,profile}));
+      console.log('BEIKA_NATIVE_DIAGNOSTIC',JSON.stringify({tick:i+1,
+        cpuMs:Math.round((cpu.user+cpu.system)/1000),heapMiB:Math.round(process.memoryUsage().heapUsed/1048576),
+        stateBytes,memoryCount,callbacks}));
+      console.log('BEIKA_NATIVE_TICK_DONE',JSON.stringify({tick:i+1,worldMinutes:saved.world.minutes,elapsedMs}));
+    }
+    if(ticks>=8){
+      const growthRatio=Number((tickTimes.at(-1)/Math.max(1,tickTimes[0])).toFixed(1));
+      // Intentionally generous, runner-independent gross-regression tripwire.
+      // Current long-run growth is still a known performance defect (#14).
+      const grossRegressionThreshold=300;
+      console.log('BEIKA_NATIVE_PERF_GUARD',JSON.stringify({firstMs:tickTimes[0],
+        lastMs:tickTimes.at(-1),growthRatio,grossRegressionThreshold,
+        knownSuperlinearGrowth:growthRatio>40}));
+      assert.ok(growthRatio<=grossRegressionThreshold,
+        'Native duration grew beyond the gross regression guard (see Issue #14)');
     }
     const index=JSON.parse(await readFile(indexFile,'utf8'));
     const lineage=index.worlds[Object.keys(index.worlds)[0]];

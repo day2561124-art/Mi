@@ -1,0 +1,40 @@
+name: Pinned wRITE Native CPU Profile
+on:
+  pull_request:
+    paths:
+      - '.github/workflows/native-profile.yml'
+      - 'scripts/summarize-cpu-profile.mjs'
+  workflow_dispatch:
+jobs:
+  profile-native:
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          submodules: true
+          persist-credentials: false
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - name: Install pinned wRITE
+        run: npm ci
+        working-directory: vendor/wRITE
+      - name: Capture CPU profile for five Native ticks and memory contrast
+        run: |
+          mkdir -p .profiles
+          node --cpu-prof --cpu-prof-dir=.profiles --test tests/native-longrun-upstream.test.mjs
+        env:
+          WRITE_ROOT: ${{ github.workspace }}/vendor/wRITE
+          BEIKA_NATIVE_TICKS: '5'
+      - name: Summarize CPU self samples
+        if: always()
+        run: node scripts/summarize-cpu-profile.mjs .profiles
+      - name: Attach synthetic-test CPU profiles
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: beika-native-cpu-profiles
+          path: .profiles/*.cpuprofile
+          if-no-files-found: error
+          retention-days: 3

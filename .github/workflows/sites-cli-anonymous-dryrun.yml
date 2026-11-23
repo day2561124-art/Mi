@@ -1,0 +1,53 @@
+name: Sites CLI anonymous dry-run (no Codex / no deployment)
+on:
+  pull_request:
+    paths:
+      - '.github/workflows/sites-cli-anonymous-dryrun.yml'
+      - 'docs/SITES-CLI-QUOTA-RESEARCH.md'
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  dry-run:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    env:
+      SITES_AUTH_PATH: /dev/null
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          submodules: false
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - name: Verify local static build
+        run: npm run check
+      - name: Create temporary Sites manifest for dry-run only
+        shell: bash
+        run: |
+          node --input-type=module <<'NODE'
+          import {mkdirSync,writeFileSync} from 'node:fs';
+          mkdirSync('.openai',{recursive:true});
+          writeFileSync('.openai/hosting.json', JSON.stringify({
+            project_id:'appgprj_6affa67227cc8191aeb0a29b451af36a',
+            static:{directory:'dist'}
+          },null,2)+'\n');
+          NODE
+      - name: Check third-party CLI published version
+        run: npm view @hayatosc/sites@0.1.2 version
+      - name: Simulate packaging without authentication or deployment
+        shell: bash
+        run: |
+          npx --yes --package=@hayatosc/sites@0.1.2 sites deploy --prebuilt --dry-run --allow-dirty
+      - name: Report no-auth scope
+        if: always()
+        shell: bash
+        run: |
+          {
+            echo '## Anonymous ChatGPT Sites CLI dry run'
+            echo '- No Codex model inference requested.'
+            echo '- No ChatGPT login, token or secret passed to runner.'
+            echo '- No real site publication attempted.'
+            echo '- Temporary manifest exists only in ephemeral workflow checkout.'
+            echo '- A successful dry run verifies only compatibility and packaging; never actual Sites authorization or publication.'
+          } >> "$GITHUB_STEP_SUMMARY"

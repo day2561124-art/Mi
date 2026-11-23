@@ -220,3 +220,68 @@ test('Scheduler prevents overlapping scans and lets World B finish while World A
   assert.equal(result.processed, 2);
   assert.equal((await store.get(a.world.id)).world.minutes, 10);
 }));
+
+
+test('World clock advances an ordinary server-owned world without a Native provider or browser writes', () => workspace(async root => {
+  let time = 1_900_000_000_000;
+  const store = createWorldStore({ root, now: () => time });
+  let activeWorld = await store.create('獨立日常世界');
+  activeWorld = await store.mutate(activeWorld.world.id, command(activeWorld, 'world-clock-resume', 'pause', { paused: false }));
+  activeWorld = await store.mutate(activeWorld.world.id, command(activeWorld, 'world-clock-speed', 'speed', { speed: 4 }));
+  const pausedWorld = await store.create('保留暫停的世界');
+  const scheduler = createWorldAutonomyScheduler({ store, now: () => time, maxWorlds: 4 });
+  try {
+    time += 10_000;
+    const first = await scheduler.tickOnce();
+    assert.equal(first.processed, 1);
+    assert.equal(first.decisions, 0, 'ordinary rules never impersonate a Native Brain');
+    assert.deepEqual(first.errors, []);
+    let snapshot = await createWorldStore({ root }).get(activeWorld.world.id);
+    assert.equal(snapshot.world.minutes, 40);
+    assert.ok(snapshot.world.logs.some(x => x.kind === 'decision'), 'NPC routines progress with World time');
+    assert.equal((await store.get(pausedWorld.world.id)).world.minutes, 0);
+
+    const same = await scheduler.tickOnce();
+    assert.equal(same.processed, 0, 'one wall-time interval cannot be counted twice');
+    assert.equal((await store.get(activeWorld.world.id)).world.minutes, 40);
+    time += 5_000;
+    const next = await scheduler.tickOnce();
+    assert.equal(next.processed, 1);
+    snapshot = await store.get(activeWorld.world.id);
+    assert.equal(snapshot.world.minutes, 60);
+
+    const stopped = await store.mutate(activeWorld.world.id, command(snapshot, 'world-clock-pause', 'pause', { paused: true }));
+    time += 30_000;
+    assert.equal((await scheduler.tickOnce()).processed, 0);
+    assert.equal((await store.get(activeWorld.world.id)).world.minutes, stopped.world.minutes);
+  } finally { scheduler.stop(); }
+}));
+
+test('A disconnected Native world remains frozen while ordinary worlds still advance', () => workspace(async root => {
+  let time = 1_900_000_000_000;
+  const { brain } = nativeMock();
+  const configured = createWorldStore({ root, now: () => time, brain });
+  const native = await active(configured, 'Native 需要提供者');
+  let ordinary = await configured.create('普通世界照常推進');
+  ordinary = await configured.mutate(ordinary.world.id, command(ordinary, 'unpause-ordinary', 'pause', { paused: false }));
+
+  // A process restarts without its Native provider. The saved Native toggle
+  // stays enabled and must not silently turn into scripted NPC decisions.
+  const disconnected = createWorldStore({ root, now: () => time });
+  const incidents = [];
+  const scheduler = createWorldAutonomyScheduler({
+    store: disconnected, now: () => time, maxWorlds: 4,
+    onError: incident => incidents.push(incident),
+  });
+  time += 10_000;
+  const result = await scheduler.tickOnce();
+  assert.equal(result.processed, 1);
+  assert.equal(result.decisions, 0);
+  assert.equal((await disconnected.get(ordinary.world.id)).world.minutes, 10);
+  const stillNative = await disconnected.get(native.world.id);
+  assert.equal(stillNative.world.minutes, 0);
+  assert.equal(stillNative.world.brainEnabled, true);
+  assert.ok(result.errors.some(x => x.world_id === native.world.id && x.code === 'BRAIN_SELECTOR_NOT_CONFIGURED'));
+  assert.deepEqual(incidents, result.errors);
+  scheduler.stop();
+}));

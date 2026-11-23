@@ -5,6 +5,10 @@ on:
       - test/chat-trigger-sites-20261123
     paths:
       - 'sites-deploy-requests/**'
+  pull_request:
+    paths:
+      - '.github/workflows/chat-sites-deploy-probe.yml'
+      - 'sites-deploy-requests/**'
   workflow_dispatch:
 permissions:
   contents: read

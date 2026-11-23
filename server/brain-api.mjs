@@ -107,7 +107,10 @@ export async function startBrainServer(env=process.env){
    const runtime=await loadWriteRuntime(env.WRITE_ROOT);
    bridge=createBrainBridge({upstream:runtime,decider:chooser});
   }
- }catch(e){console.error('wRITE 未就緒，仍提供原本的本地規則模擬：',e.message);}
+ }catch(e){
+  if(env.BRAIN_NATIVE==='1')throw e; // An explicitly requested Native service must never quietly downgrade.
+  console.error('wRITE 未就緒，仍提供原本的本地規則模擬：',e.message);
+ }
  const worldStore=createWorldStore({root:env.WORLD_STORE_ROOT||resolve('.beika-private/worlds'),brain:bridge});
  const server=createBrainServer({bridge,worldStore});
  if(bridge?.status().mode==='native_turn'&&bridge?.status().decision_provider){

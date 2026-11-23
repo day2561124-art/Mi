@@ -1,9 +1,7 @@
 name: Pinned wRITE Native CPU Profile
 on:
-  pull_request:
-    paths:
-      - '.github/workflows/native-profile.yml'
-      - 'scripts/summarize-cpu-profile.mjs'
+  push:
+    branches: [experiment/profile-phase82a-merged-upstream]
   workflow_dispatch:
 jobs:
   profile-native:

@@ -1,0 +1,70 @@
+name: Chat-triggered Sites deployment probe (safe)
+on:
+  push:
+    branches:
+      - test/chat-trigger-sites-20261123
+    paths:
+      - 'sites-deploy-requests/**'
+  pull_request:
+    paths:
+      - '.github/workflows/chat-sites-deploy-probe.yml'
+      - 'sites-deploy-requests/**'
+  workflow_dispatch:
+permissions:
+  contents: read
+concurrency:
+  group: chat-sites-probe-${{ github.ref }}
+  cancel-in-progress: false
+jobs:
+  preflight:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          submodules: false
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - name: Validate chat-issued request
+        shell: bash
+        run: |
+          node --input-type=module <<'NODE'
+          import {readFileSync, readdirSync} from 'node:fs';
+          const files = readdirSync('sites-deploy-requests').filter((f) => f.endsWith('.json')).sort();
+          if (!files.length) throw Error('No deployment request found');
+          const request = JSON.parse(readFileSync('sites-deploy-requests/' + files.at(-1), 'utf8'));
+          if (request.target_project_id !== 'appgprj_6affa67227cc8191aeb0a29b451af36a') throw Error('Unexpected Sites project id');
+          if (request.mode !== 'preflight_only') throw Error('Production deployment prohibited in this probe');
+          if (request.repository !== 'day2561124-art/Mi') throw Error('Unexpected repository');
+          console.log('Validated preflight request:', files.at(-1));
+          NODE
+      - name: Test and build candidate
+        run: npm run check
+      - name: Verify build and Sites handoff capability
+        shell: bash
+        run: |
+          test -s dist/index.html
+          test ! -e dist/.env
+          {
+            echo '## Chat-triggered Sites deployment probe'
+            echo ''
+            echo '- GitHub chat-triggered Actions: **PASS**'
+            echo '- Tests and static build: **PASS**'
+            echo '- Target Sites project: `appgprj_6affa67227cc8191aeb0a29b451af36a`'
+            echo '- Source commit: `${{ github.sha }}`'
+            if [ -f .openai/hosting.json ]; then
+              echo '- Sites source manifest: **PRESENT (not authenticated/validated)**'
+            else
+              echo '- Sites source manifest: **MISSING**'
+            fi
+            echo '- Sites deployment: **NOT ATTEMPTED**'
+            echo '- Reason: No official Sites deployment connector or independently authorized publish credential is available in this GitHub runner. Production site remains unchanged.'
+            echo '- The artifact is a static frontend only; native Node/World backends are not included.'
+          } >> "$GITHUB_STEP_SUMMARY"
+      - name: Store static candidate for authorized Sites handoff
+        uses: actions/upload-artifact@v4
+        with:
+          name: mi-chat-triggered-sites-candidate
+          path: dist/
+          if-no-files-found: error
+          retention-days: 7

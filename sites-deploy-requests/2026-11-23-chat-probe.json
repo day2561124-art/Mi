@@ -1,0 +1,8 @@
+{
+  "schema_version": 1,
+  "repository": "day2561124-art/Mi",
+  "target_project_id": "appgprj_6affa67227cc8191aeb0a29b451af36a",
+  "mode": "preflight_only",
+  "requested_via": "ChatGPT GitHub connector",
+  "purpose": "Prove a conversational GitHub write can trigger GitHub Actions and produce a Sites deployment candidate; no production change."
+}

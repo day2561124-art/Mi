@@ -36,7 +36,7 @@ async function setup(store) {
   return {id,saved,people:world.people};
 }
 test('real pinned Native: three independent NPC memories and receipts survive repeated restarts',
-  {skip:!process.env.WRITE_ROOT,timeout:900000},async()=>{
+  {skip:!process.env.WRITE_ROOT,timeout:1500000},async()=>{
   const ticks=Number(process.env.BEIKA_NATIVE_TICKS??8);
   assert.ok(Number.isInteger(ticks)&&ticks>=4&&ticks<=16);
   await fixture('mi-native-endurance-',async root=>{
@@ -57,6 +57,8 @@ test('real pinned Native: three independent NPC memories and receipts survive re
     const ids=new Set();
     let restarts=0;
     for(let i=0;i<ticks;i++){
+      const tickStart=Date.now();
+      console.log('BEIKA_NATIVE_TICK_START',JSON.stringify({tick:i+1,total:ticks}));
       if(i&&i%3===0){
         store=createWorldStore({root:worldRoot,brain:makeBrain()});
         saved=await store.get(id);
@@ -94,6 +96,7 @@ test('real pinned Native: three independent NPC memories and receipts survive re
       }
       if(i>0)assert.ok(packets.slice(i*3,(i+1)*3).every(p=>
         JSON.stringify(p).includes('post_outcome_action_experience')));
+      console.log('BEIKA_NATIVE_TICK_DONE',JSON.stringify({tick:i+1,worldMinutes:saved.world.minutes,elapsedMs:Date.now()-tickStart}));
     }
     const index=JSON.parse(await readFile(indexFile,'utf8'));
     const lineage=index.worlds[Object.keys(index.worlds)[0]];

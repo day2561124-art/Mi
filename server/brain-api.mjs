@@ -113,9 +113,13 @@ export async function startBrainServer(env=process.env){
  }
  const worldStore=createWorldStore({root:env.WORLD_STORE_ROOT||resolve('.beika-private/worlds'),brain:bridge});
  const server=createBrainServer({bridge,worldStore});
- if(bridge?.status().mode==='native_turn'&&bridge?.status().decision_provider){
-  const scheduler=createWorldAutonomyScheduler({store:worldStore});
-  scheduler.start();server.on('close',()=>scheduler.stop());
- }
+ // World time and local NPC routines run even without a Native chooser.
+ // An explicitly enabled Native world still requires its provider and
+ // cannot silently downgrade to the ordinary-rule simulation.
+ const scheduler=createWorldAutonomyScheduler({
+  store:worldStore,
+  onError: incident => console.error('米花背景世界推進失敗：',incident.world_id,incident.code),
+ });
+ scheduler.start();server.on('close',()=>scheduler.stop());
  return server.listen(port,'127.0.0.1',()=>console.log(`Mi preview at http://127.0.0.1:${port} (upstream=${Boolean(bridge)}, chooser=${Boolean(bridge?.status().decision_provider)})`));
 }

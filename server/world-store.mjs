@@ -1,6 +1,6 @@
 import { verifyMiAcknowledgement } from './reconciliation-ledger.mjs';
 import { createHash, randomUUID } from 'node:crypto';
-import { mkdir, readFile, readdir, rename, writeFile, unlink } from 'node:fs/promises';
+import { mkdir, readFile, readdir, rename, open, link, unlink } from 'node:fs/promises';
 import { resolve, join, dirname } from 'node:path';
 import { makeWorld, upgradeWorld, validateWorld, advanceWorld, visitPlace, inspectRoom, catchUpWorld } from '../src/core/world.js';
 import { makeBoundedBrainRequest, applyBrainDecision } from '../src/core/brain-bridge.js';
@@ -45,22 +45,39 @@ export function createWorldStore({ root = resolve('.beika-private/worlds'), now 
     if (checksum(value.world) !== value.hash || value.world.id !== id) throw error('WORLD_STORE_CORRUPTED', '伺服器存檔雜湊或識別不相符');
     return value;
   }
+  // A rename is atomic for readers, but does not by itself make a write
+  // durable across an OS crash. Sync the new file before publishing it; on
+  // POSIX also sync the containing directory after the rename/creation.
+  async function syncDirectory() {
+    if (process.platform === 'win32') return; // Windows does not support directory open/fsync consistently.
+    const handle = await open(directory, 'r');
+    try { await handle.sync(); } finally { await handle.close(); }
+  }
+  async function syncWrite(file, data) {
+    const handle = await open(file, 'wx', 0o600);
+    try { await handle.writeFile(data, 'utf8'); await handle.sync(); }
+    finally { await handle.close(); }
+  }
   async function persist(id, value, { exclusive = false } = {}) {
     const file = path(id);
     await mkdir(directory, { recursive: true, mode: 0o700 });
-    if (exclusive) {
-      try {
-        await writeFile(file, JSON.stringify(value), { flag: 'wx', mode: 0o600 });
-      } catch (e) {
-        if (e.code === 'EEXIST') throw error('WORLD_ALREADY_EXISTS', '伺服器已存在同識別的世界');
-        throw e;
-      }
-      return;
-    }
     const temporary = `${file}.${process.pid}.${randomUUID()}.tmp`;
     try {
-      await writeFile(temporary, JSON.stringify(value), { flag: 'wx', mode: 0o600 });
-      await rename(temporary, file);
+      await syncWrite(temporary, JSON.stringify(value));
+      if (exclusive) {
+        // A durable temporary inode is published with an exclusive hard link.
+        // A failed/partial write never becomes a visible new World, and an
+        // existing World is never overwritten during create or migrate.
+        try { await link(temporary, file); }
+        catch (e) {
+          if (e.code === 'EEXIST') throw error('WORLD_ALREADY_EXISTS', '伺服器已存在同識別的世界');
+          throw e;
+        }
+        await unlink(temporary);
+      } else {
+        await rename(temporary, file);
+      }
+      await syncDirectory();
     } catch (e) { await unlink(temporary).catch(() => {}); throw e; }
   }
   const newEntry = world => ({ version: 1, revision: 0, hash: checksum(world), world, operations: [] });
@@ -119,7 +136,9 @@ export function createWorldStore({ root = resolve('.beika-private/worlds'), now 
     await persist(updated.id, target);
     return target;
   }
-  const withSavedAt = world => ({ ...world, savedAt: now() });
+  // Clock corrections may move wall time backwards. Never regress the save
+  // anchor, or future background ticks may replay already-accounted time.
+  const withSavedAt = world => ({ ...world, savedAt: Math.max(world.savedAt, now()) });
   function applyCommand(world, type, args) {
     if (!normal(args)) throw error('INVALID_WORLD_REQUEST', '指令參數格式錯誤');
     switch (type) {

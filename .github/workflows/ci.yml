@@ -11,3 +11,7 @@ jobs:
         with:
           node-version: '22'
       - run: npm run check
+      - name: Bounded durable multi-world crash stress
+        run: npm run stress
+        env:
+          BEIKA_STRESS_TICKS: '400'

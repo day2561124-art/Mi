@@ -1,0 +1,30 @@
+name: Sites handoff preflight (no deployment)
+on:
+  pull_request:
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  handoff:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          submodules: false
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - run: npm run check
+      - name: Assert candidate is static-only
+        shell: bash
+        run: |
+          test -s dist/index.html
+          test ! -e dist/.env
+          echo "This candidate contains only dist/. Node server and persistent storage are NOT deployed."
+      - name: Upload candidate for manual Sites compatibility review
+        uses: actions/upload-artifact@v4
+        with:
+          name: mi-static-candidate
+          path: dist/
+          if-no-files-found: error
+          retention-days: 7

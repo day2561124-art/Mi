@@ -1,3 +1,4 @@
+import { verifyMiAcknowledgement } from './reconciliation-ledger.mjs';
 import { createHash, randomUUID } from 'node:crypto';
 import { mkdir, readFile, readdir, rename, writeFile, unlink } from 'node:fs/promises';
 import { resolve, join, dirname } from 'node:path';
@@ -21,7 +22,7 @@ const assertRevision = (entry, expectedRevision, expectedHash) => {
 const clientEntry = entry => ({ world: clone(entry.world), revision: entry.revision, hash: entry.hash });
 
 /** Node-only local authority. Never accept a client-supplied replacement World in mutate(). */
-export function createWorldStore({ root = resolve('.beika-private/worlds'), now = () => Date.now(), brain = null } = {}) {
+export function createWorldStore({ root = resolve('.beika-private/worlds'), now = () => Date.now(), brain = null, reconciliationHooks = {} } = {}) {
   const directory = resolve(root);
   // Each world has an independent queue. A slow/erroring NPC brain for A
   // must not block valid writes to unrelated world B in the same process.
@@ -159,9 +160,20 @@ export function createWorldStore({ root = resolve('.beika-private/worlds'), now 
       if (!brain?.status?.().decision_provider) throw error('BRAIN_SELECTOR_NOT_CONFIGURED', '原生角色腦決策提供者尚未設定');
       if (brain?.status?.().mode === 'native_turn' && entry.world.brainEnabled !== true)
         throw error('AUTONOMY_DISABLED', '原生角色腦決策前，必須明確啟用 Native 模式');
+      if (entry.world.brainOutcomes?.some(item => item.actorId === actor_id && (item.state === 'pending' || item.state === 'ready')))
+        throw error('BRAIN_OUTCOME_UNRECONCILED', '角色上一筆行動尚未結算或對帳');
       const packet = { ...makeBoundedBrainRequest(entry.world, actor_id), world_id: serverLineage(id) };
       if (!packet.actions.length) throw error('NO_WORLD_CANDIDATES', '角色目前沒有可以執行的候選行動');
       const selected = await brain.decide(packet);
+      if (selected?.status === 'selected' &&
+          (selected.committed !== true || selected.actor_id !== actor_id ||
+          selected.world_minute !== packet.world_minute ||
+          !/^[a-f0-9]{64}$/.test(selected.decision_id ?? ''))) {
+        throw error('BRAIN_RESPONSE_INVALID', '原生決策尚未提交或身分與世界不符');
+      }
+      if (selected?.status !== 'selected' && selected?.status !== 'rejected' && selected?.status !== 'no_candidate')
+        throw error('BRAIN_RESPONSE_INVALID', '原生決策未回傳可確認的狀態');
+      await reconciliationHooks.afterNativeDecision?.({ world_id: id, actor_id });
       const next = selected?.status === 'selected' && selected?.action_id
         ? applyBrainDecision(entry.world, actor_id, selected.action_id, selected.decision_id)
         : clone(entry.world);
@@ -200,7 +212,7 @@ export function createWorldStore({ root = resolve('.beika-private/worlds'), now 
         // A prior action must settle before another Brain choice. This also
         // avoids rerunning cognition for actors that are still on the road.
         if (actor.targetId || actor.travel || next.brainOutcomes?.some(r =>
-          r.actorId === actor.id && r.state === 'pending')) continue;
+          r.actorId === actor.id && ['pending','ready'].includes(r.state))) continue;
         const request = makeBoundedBrainRequest(next, actor.id);
         if (!request.actions.length) continue;
         try {
@@ -224,23 +236,82 @@ export function createWorldStore({ root = resolve('.beika-private/worlds'), now 
       return { ...clientEntry(committed), duplicate: false, decisions, failures };
     }, id);
   }
-  /** Feed only server-stored, engine-settled facts to the Native adapter. */
+  /** Write-ahead outbox is the committed World.brainOutcomes ready record.
+   * A Native acknowledgement is persisted first, then the World marks delivery.
+   * A crash between those commits is repaired by replaying the same bounded
+   * evidence; Native must return the same immutable receipt on duplicate.
+   */
   async function reconcile(id) {
     return serialized(async () => {
       let entry = await read(id);
-      if (typeof brain?.acknowledgeAuthoritative !== 'function') return { ...clientEntry(entry), delivered: 0 };
+      const issues = [];
+      if (typeof brain?.acknowledgeAuthoritative !== 'function') {
+        return { ...clientEntry(entry), delivered: 0, pending: readyBrainFeedback(entry.world).length,
+          issues: [{ code: 'BRAIN_FEEDBACK_UNAVAILABLE' }] };
+      }
       let delivered = 0;
       for (const feedback of readyBrainFeedback(entry.world).slice(0, 12)) {
+        const input = { ...feedback, world_id: serverLineage(id) };
         try {
-          const ack = await brain.acknowledgeAuthoritative({ ...feedback, world_id: serverLineage(id) });
-          if (ack?.accepted !== true) break;
-          const updated = withSavedAt(markBrainFeedbackDelivered(entry.world, feedback.decision_id));
+          const ack = await brain.acknowledgeAuthoritative(input);
+          if (ack?.accepted !== true) throw error('MI_RECEIPT_NOT_ACCEPTED', '上游尚未接受這項行動結果');
+          const proof = verifyMiAcknowledgement(input, ack.acknowledgement);
+          // Test-only fault boundary: simulates process termination after
+          // Native's durable ACK but before the local World commit.
+          await reconciliationHooks.afterRemoteAck?.({ world_id: id, decision_id: feedback.decision_id });
+          const updated = markBrainFeedbackDelivered(entry.world, feedback.decision_id, proof);
           entry = await commit(entry, `receipt:${feedback.decision_id}`, checksum(feedback), updated);
           delivered++;
-        } catch { break; /* Persisted ready records remain available for retry. */ }
+        } catch (e) {
+          issues.push({ decision_id: feedback.decision_id,
+            code: String(e?.code || 'MI_RECONCILIATION_INTERRUPTED').slice(0, 80) });
+          continue; // Quarantine one receipt; other NPC receipts can still reconcile.
+        }
       }
-      return { ...clientEntry(entry), delivered };
+      return { ...clientEntry(entry), delivered, pending: readyBrainFeedback(entry.world).length, issues };
     }, id);
   }
-  return { create, migrate, get, list, mutate, decide, autonomousTick, reconcile };
+  /** Audit already delivered records against the durable Native inbox.
+   * Returns only bounded status, no private character memory or World truth.
+   * Missing receipts are reported, not silently fabricated or deleted.
+   */
+  async function auditReconciliation(id) {
+    return serialized(async () => {
+      const entry = await read(id), issues = [];
+      let verified = 0, legacy = 0, ready = 0;
+      const outcomes = entry.world.brainOutcomes || [];
+      for (const record of outcomes) {
+        if (record.state === 'ready') { ready++; continue; }
+        if (record.state !== 'delivered') continue;
+        if (!record.acknowledgement) {
+          legacy++;
+          issues.push({ decision_id: record.decisionId, code: 'MI_LEGACY_UNPROVEN_DELIVERY' });
+          continue;
+        }
+        const input = { ...record.outcome, world_id: serverLineage(id),
+          actor_id: record.actorId, decision_id: record.decisionId, action_id: record.actionId };
+        try {
+          verifyMiAcknowledgement(input, record.acknowledgement);
+          if (typeof brain?.inspectAcknowledgement !== 'function') {
+            issues.push({ decision_id: record.decisionId, code: 'MI_NATIVE_AUDIT_UNAVAILABLE' });
+            continue;
+          }
+          const observed = await brain.inspectAcknowledgement({
+            world_id: serverLineage(id), decision_id: record.decisionId,
+          });
+          if (!observed) {
+            issues.push({ decision_id: record.decisionId, code: 'MI_NATIVE_RECEIPT_MISSING' });
+            continue;
+          }
+          verifyMiAcknowledgement(input, observed);
+          verified++;
+        } catch (e) {
+          issues.push({ decision_id: record.decisionId,
+            code: String(e?.code || 'MI_NATIVE_AUDIT_FAILED').slice(0, 80) });
+        }
+      }
+      return { world_id: id, revision: entry.revision, ready, verified, legacy, issues };
+    }, id);
+  }
+  return { create, migrate, get, list, mutate, decide, autonomousTick, reconcile, auditReconciliation };
 }

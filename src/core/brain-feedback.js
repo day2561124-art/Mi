@@ -6,7 +6,7 @@ const COMPLETED=new Set(['observed','arrived','investigated','not_confirmed','in
 const clone=value=>structuredClone(value);
 
 export function registerBrainDecision(world,actor,chosen,decisionId){
- if(!decisionId)return world;
+ if(!decisionId)return world; // Legacy direct-capability decisions remain compatible.
  if(!/^[a-f0-9]{32,64}$/.test(decisionId))throw new Error('無效的角色腦決策憑證。');
  world.brainOutcomes ||= [];
  if(world.brainOutcomes.some(x=>x.decisionId===decisionId))throw new Error('角色腦決策憑證重複。');
@@ -52,9 +52,11 @@ export function readyBrainFeedback(world){
   action_id:x.actionId,...x.outcome,
  }));
 }
-export function markBrainFeedbackDelivered(snapshot,decisionId){
+export function markBrainFeedbackDelivered(snapshot,decisionId,acknowledgement=null){
  const world=clone(snapshot);
  const record=(world.brainOutcomes||[]).find(x=>x.decisionId===decisionId);
  if(!record||record.state!=='ready')throw new Error('找不到等待回饋的角色行動結果。');
- record.state='delivered';return world;
+ record.state='delivered';
+ if(acknowledgement)record.acknowledgement=structuredClone(acknowledgement);
+ return world;
 }

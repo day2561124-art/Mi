@@ -22,3 +22,4 @@ jobs:
         env:
           WRITE_ROOT: ${{ github.workspace }}/vendor/wRITE
           BEIKA_NATIVE_TICKS: '8'
+          BEIKA_NATIVE_CPU_PROFILE: '1'

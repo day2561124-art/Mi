@@ -198,6 +198,12 @@ Phase63C 有新的 `episodic_action_experience` 來源檢索條件，不能把�
 - 三名原著 NPC、八輪的受控實測，第 8 輪由約 104 秒降至約 59 秒；測試中仍驗證 24 筆回執、兩次重啟與 Phase63C 記憶對後續行動的作用。此為單組 GitHub runner 比對，非普遍保證。
 - 效能尚未達到長期放置所需的水準，第 8 輪仍為第 1 輪約 59 倍，Issue #14 繼續開啟。詳見 [Native 效能分析](docs/NATIVE-PERFORMANCE-PROFILE.md)。
 
+## Rebuild 0.20：精簡 World History 儲存
+
+- 固定已合併的通用 `wRITE` PR #62（`47212ea5`），把歷史檔案的縮排 JSON 改成不損失欄位的精簡 JSON。既有縮排存檔繼續可讀，未變更 World State、回合證據、雜湊演算法與交易防護。
+- 在 Node 22、三名原著 NPC、八輪及啟用 CPU 取樣的測試中，第八輪從前一正式版約 60.2 秒降至候選版約 40.5 秒（單組 GitHub runner A/B 觀察；不是所有機器都保證）。
+- 仍驗證 24 筆回執、兩次重啟、角色記憶隔離及 Phase63C 回憶影響行動。第八輪仍比第一輪慢約 48.6 倍，Issue #14 仍開啟。詳見 [Native 效能分析](docs/NATIVE-PERFORMANCE-PROFILE.md)。
+
 ## 工程紀錄歸屬與上游同步
 
 - 只在 `Mi` 保存米花原著人物、遊戲時間線、劇情、角色記憶與專屬長跑測試；目前使用柯南、毛利蘭、灰原哀進行原生介面測試，固定規則的選擇器**不代表**已驗證角色完全自主。

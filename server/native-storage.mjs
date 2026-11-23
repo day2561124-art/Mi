@@ -1,13 +1,12 @@
 import {createHash,randomUUID} from 'node:crypto';
 import {cp,copyFile,lstat,mkdir,open,readFile,readdir,rename,rm} from 'node:fs/promises';
 import {constants} from 'node:fs';
-import {dirname,join,relative,resolve} from 'node:path';
+import {dirname,join,relative,resolve,isAbsolute} from 'node:path';
 
 const sessionPattern=/^agent_run_\d{8}-\d{6}-[a-f0-9]{8}$/;
 const fail=(code,message)=>Object.assign(new Error(message),{code});
 const hash=b=>createHash('sha256').update(b).digest('hex');
-const inside=(a,b)=>{const r=relative(a,b);return r===''||(!r.startsWith('..')&&!r.startsWith('/')&&!r.includes('..'+requireSeparator()));};
-const requireSeparator=()=>process.platform==='win32'?'\\':'/';
+const inside=(a,b)=>{const r=relative(a,b);return r===''||(r!=='..'&&!r.startsWith('..'+(process.platform==='win32'?'\\':'/'))&&!isAbsolute(r));};
 async function exists(p){try{await lstat(p);return true;}catch(e){if(e.code==='ENOENT')return false;throw e;}}
 async function inventory(root){
  const files={};
@@ -35,6 +34,27 @@ async function copyExact(source,target){
  catch(e){if(e.code!=='EEXIST')throw e;}
  if(hash(await readFile(target))!==hash(data))throw fail('NATIVE_MIGRATION_CONFLICT','角色腦輔助紀錄不一致。');
 }
+async function migrationReceipt(file){
+ try{return JSON.parse(await readFile(file,'utf8'));}
+ catch(e){if(e.code==='ENOENT')return null;throw e;}
+}
+async function saveMigrationReceipt(file,id,fingerprint){
+ await mkdir(dirname(file),{recursive:true});
+ const h=await open(file,'wx',0o600);
+ try{await h.writeFile(JSON.stringify({version:1,session_id:id,source_fingerprint:fingerprint}));await h.sync();}
+ finally{await h.close();}
+}
+async function requireAppendOnlyContinuation(source,target){
+ const srcHistory=JSON.parse(await readFile(join(source,'world_history.json'),'utf8'));
+ const dstHistory=JSON.parse(await readFile(join(target,'world_history.json'),'utf8'));
+ const srcState=JSON.parse(await readFile(join(source,'world_state.json'),'utf8'));
+ const dstState=JSON.parse(await readFile(join(target,'world_state.json'),'utf8'));
+ if(!Array.isArray(srcHistory.turns)||!Array.isArray(dstHistory.turns)
+   ||!Number.isSafeInteger(srcState.revision)||!Number.isSafeInteger(dstState.revision)
+   ||dstState.revision<srcState.revision||dstHistory.turns.length<srcHistory.turns.length
+   ||srcHistory.turns.some((x,i)=>hash(JSON.stringify(x))!==hash(JSON.stringify(dstHistory.turns[i]))))
+    throw fail('NATIVE_MIGRATION_CONFLICT','新位置的角色腦歷史不是舊歷史的有效延續。');
+}
 export async function ensureOwnedNativeSessions({upstreamRoot,privateRoot,indexFile}){
  const from=resolve(upstreamRoot),to=resolve(privateRoot),index=resolve(indexFile);
  if(inside(from,to)||inside(to,from))throw fail('NATIVE_DATA_ROOT_INVALID','米花角色腦資料目錄不可與上游程式碼重疊。');
@@ -53,12 +73,22 @@ export async function ensureOwnedNativeSessions({upstreamRoot,privateRoot,indexF
  try{
   for(const id of ids){
    const source=join(from,'data','agent_runs',id),target=join(to,'agent_runs',id);
+   const receiptFile=join(to,'.mi-migration-receipts',id+'.json');
    const hasOld=await exists(source),hasNew=await exists(target);
    if(!hasOld&&!hasNew)throw fail('NATIVE_MIGRATION_MISSING','舊角色腦存檔遺失，拒絕建立替代回合。');
    const original=hasOld?await verified(source,id):null;
    if(hasNew){
-    if(original!==null&&original!==await verified(target,id))throw fail('NATIVE_MIGRATION_CONFLICT','存檔與已搬移版本衝突。');
-    if(original===null)await verified(target,id);
+    const current=await verified(target,id);
+    const receipt=await migrationReceipt(receiptFile);
+    if(receipt){
+     if(receipt.version!==1||receipt.session_id!==id||!hasOld
+       ||receipt.source_fingerprint!==original)
+       throw fail('NATIVE_MIGRATION_CONFLICT','舊資料來源與遷移證明不一致。');
+     await requireAppendOnlyContinuation(source,target);
+    }else if(hasOld){
+     if(original!==current)throw fail('NATIVE_MIGRATION_CONFLICT','缺少遷移證明且新舊存檔不一致。');
+     await saveMigrationReceipt(receiptFile,id,original);
+    }
     existing++;continue;
    }
    await mkdir(dirname(target),{recursive:true});
@@ -68,6 +98,7 @@ export async function ensureOwnedNativeSessions({upstreamRoot,privateRoot,indexF
     if(original!==await verified(stage,id))throw fail('NATIVE_MIGRATION_VERIFY','搬移後雜湊不一致。');
     if(await exists(target))throw fail('NATIVE_MIGRATION_CONFLICT','目的地已被其他程序建立。');
     await rename(stage,target);
+    await saveMigrationReceipt(receiptFile,id,original);
     migrated++;
    }finally{await rm(stage,{recursive:true,force:true}).catch(()=>{});}
   }

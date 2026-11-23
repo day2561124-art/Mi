@@ -95,9 +95,10 @@ export async function configureMiUpstreamStorage(env=process.env){
 }
 export async function startBrainServer(env=process.env){
  const port=Number(env.PORT||4173);
+ // Storage validation is mandatory, not an optional integration failure.
+ const {indexFile}=await configureMiUpstreamStorage(env);
  let bridge=null;
  try{
-  const {indexFile}=await configureMiUpstreamStorage(env);
   const chooser=await loadLocalDecider(env);
   if(env.BRAIN_NATIVE==='1'){
    const runtime=await loadNativeRuntime(env.WRITE_ROOT);

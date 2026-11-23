@@ -48,11 +48,15 @@ export function summarizeNativeCpuProfile(profile, limit=15) {
       current=parent.get(current);
     }
   }
-  const sorted=table=>[...table.entries()].sort((a,b)=>b[1]-a[1]).slice(0,limit)
+  const sorted=(table,predicate=()=>true)=>[...table.entries()]
+    .filter(([frame])=>predicate(frame)).sort((a,b)=>b[1]-a[1]).slice(0,limit)
     .map(([frame,us])=>({frame,sampledMs:rounded(us/1000),
       percent:totalUs?rounded(us*100/totalUs):0}));
+  const upstream=frame=>frame.includes(' @ wRITE/');
+  const nonRoot=frame=>!frame.startsWith('(root) @');
   return {sampleCount:accepted,totalSampledMs:rounded(totalUs/1000),
-    topSelf:sorted(self),topInclusive:sorted(inclusive)};
+    topSelf:sorted(self,nonRoot),topInclusive:sorted(inclusive,nonRoot),
+    topUpstreamSelf:sorted(self,upstream),topUpstreamInclusive:sorted(inclusive,upstream)};
 }
 
 export async function startNativeCpuProfile() {

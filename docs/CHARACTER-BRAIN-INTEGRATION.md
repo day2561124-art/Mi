@@ -2,12 +2,21 @@
 
 ## 來源與權責
 
-- 上游：`https://github.com/day2561124-art/wRITE`，本專案透過 Git 子模組鎖定到 `87305347fe2a4c39ce855f773e8673d4956066b5`。
+- 上游：`https://github.com/day2561124-art/wRITE`，本專案透過 Git 子模組鎖定到 `a08f2dd17474a920a7d56303b9228061588fc45d`（通用 PR #46 已合併）。
 - 米花：`https://github.com/day2561124-art/Mi`。原著角色資料、世界／存檔及專屬長跑證據只歸本儲存庫管理，見 `docs/PROJECT-BOUNDARIES.md`。
 - 使用正式上游的原生 `runWorldSimulationTurn`、世界提交、回執／記憶形成與檢索（需在本機服務中明確啟用）；不是在本專案複製另一份通用角色腦。
 - 下文 Rebuild 0.4 等舊階段說明保留作為歷史研發紀錄，不能當成目前最新功能清單。
 - 角色行動候選來源為米花 World 的地點路網、已知線索與體力約束。World 核心才負責實際位移與存檔，brain 不能自行寫入世界成功結果。
 - 目前 `Mi` 的本地規則仍用於離線、補算與上游未啟用狀態，不能宣稱所有 NPC 已由完整 Character Brain 接管。
+
+
+### Native 儲存位置與安全啟動（2026-11-23）
+
+Native wRITE 世界回合資料由米花的 `MI_WRITE_DATA_ROOT` 指定，預設為 `.beika-private/write-data`，在上游模組載入前設置 `WRITE_DATA_ROOT`。這是單機環境內的資料歸屬隔離，**不是**跨裝置雲端備份或多使用者權限隔離。
+
+啟動時會依米花私有的 `brain-native-index.json` 核對既有 Native session。舊回合只複製不刪除原始資料；依回合身分、雜湊、正式歷史與遷移證明決定是否可續接。若原始回合缺失、私有歷史不相容，或來源已移除但沒有遷移證明，啟動必須拒絕，不可暗中建立全新回合。明確設定 `BRAIN_NATIVE=1` 時，上游載入錯誤也不得退回規則模擬。
+
+更新上游子模組不會自動搬動本機私有資料，正式運作前請另外備份 `.beika-private/`。GitHub CI 驗證的都是合成測試資料，不能代替使用者實際電腦存檔的遷移驗收。
 
 ## 啟動
 

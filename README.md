@@ -147,3 +147,11 @@ Phase63C 有新的 `episodic_action_experience` 來源檢索條件，不能把�
 - 仍只支援單一 Node 程序與本機預覽。此測試**不等於**多主機交易、真的關機斷電、雲端授權隔離、真實模型連續 6,000 回合或角色通用自我學習已經驗收。
 
 詳細測試方法與限制見 `docs/STRESS-AND-RECOVERY.md`。
+
+
+## Rebuild 0.13：真實 wRITE 多 NPC 長期整合驗收
+
+新增獨立的 Native Endurance GitHub CI，使用鎖定版本的上游實體程式，驗證三名 NPC 持續決策、已確認世界後果、Phase76/Phase63 記憶與多次重新啟動。另有真正米花 World 提交的受控回憶對照組。測試用的選擇器是固定規則，不是已完成完全自主的 AI；原 2,000 回合模擬壓測也沒有改稱為真實 AI 回合。
+
+執行：`WRITE_ROOT=/absolute/path/to/wRITE BEIKA_NATIVE_TICKS=8 npm run native-stress`。
+本機無上游時會明確跳過，正式結論以 GitHub 上游 CI 的結果為準。正式 Sites 保持不動。

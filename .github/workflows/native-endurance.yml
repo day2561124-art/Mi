@@ -1,0 +1,24 @@
+name: Pinned wRITE Native Endurance
+on:
+  push:
+  pull_request:
+jobs:
+  real-native-longrun:
+    runs-on: ubuntu-latest
+    timeout-minutes: 40
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          submodules: true
+          persist-credentials: false
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - name: Install upstream runtime
+        run: npm ci
+        working-directory: vendor/wRITE
+      - name: Three-NPC native longitudinal validation and memory-to-World contrast
+        run: npm run native-stress
+        env:
+          WRITE_ROOT: ${{ github.workspace }}/vendor/wRITE
+          BEIKA_NATIVE_TICKS: '8'

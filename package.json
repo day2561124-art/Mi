@@ -1,7 +1,7 @@
 {
   "name": "beika-stage-rebuild",
   "private": true,
-  "version": "0.12.0",
+  "version": "0.13.0",
   "type": "module",
   "description": "米花大舞台：獨立重作的離線優先觀察模擬器",
   "scripts": {
@@ -9,7 +9,8 @@
     "build": "node scripts/build.mjs",
     "test": "node --test tests/*.test.mjs",
     "stress": "node --test tests/stress-longrun.mjs",
-    "check": "npm run test && npm run build"
+    "check": "npm run test && npm run build",
+    "native-stress": "node --test tests/native-longrun-upstream.test.mjs"
   },
   "engines": {
     "node": ">=20"

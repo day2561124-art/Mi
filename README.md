@@ -216,6 +216,12 @@ Phase63C 有新的 `episodic_action_experience` 來源檢索條件，不能把�
 - 米花長跑新增測試後統計 `BEIKA_NATIVE_Q_DENSITY`，只輸出證據封包的總數，不輸出私人角色內容。實測 47 個歷史回合中有 24 個 Phase81Q 封包、**0 個包含真正證據**。因此此短路在後段 Native 長跑不會生效，不能宣稱它解決米花效能問題。
 - 原始候選測試 [CI 45186270683](https://github.com/day2561124-art/Mi/actions/runs/45186270683) 第八輪約 58.18 秒，前一正式版 [CI 45178243715](https://github.com/day2561124-art/Mi/actions/runs/45178243715) 約 47.26 秒；執行器負載不一，這不是可靠的退步證明，也沒有支持加速的證據。下一階段需研究**已有來源驗證但沒有經驗記錄**的封包重建成本。詳見 [Native 效能分析](docs/NATIVE-PERFORMANCE-PROFILE.md)，Issue #14 繼續開啟。
 
+## Rebuild 0.23：Phase82A 同回合隔離快照
+
+- 正式固定通用 [wRITE PR #74](https://github.com/day2561124-art/wRITE/pull/74)（`149fe762`）：在一次 World 解析中，Phase82A/B/C/D 共用**單一完整 JSON 正規化、深層凍結的歷史快照**，但每次仍重新驗證當前與全部舊 Phase81Q 的來源、雜湊及防偽規則。未建立跨回合快取、未刪歷史與記憶。
+- 米花使用 3 名原著 NPC、8 輪、24 筆回執、兩次重啟與 Phase63C 記憶對照。候選 [Native CI](https://github.com/day2561124-art/Mi/actions/runs/45189989450) 第八輪 **42.15 秒**，前一正式版 [CI](https://github.com/day2561124-art/Mi/actions/runs/45187598701) **57.36 秒**；Phase82A 深拷貝 CPU 取樣由約 14.6 秒降到 1.8 秒。這是單次跨 runner 觀測，並非所有裝置都能達成相同降幅。
+- 第八輪仍比第一輪慢 **36.5 倍**；長期效能 Issue #14 仍開啟。詳見 [Native 效能分析](docs/NATIVE-PERFORMANCE-PROFILE.md)。
+
 ## 工程紀錄歸屬與上游同步
 
 - 只在 `Mi` 保存米花原著人物、遊戲時間線、劇情、角色記憶與專屬長跑測試；目前使用柯南、毛利蘭、灰原哀進行原生介面測試，固定規則的選擇器**不代表**已驗證角色完全自主。

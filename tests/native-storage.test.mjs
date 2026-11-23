@@ -81,3 +81,25 @@ test('invalid legacy index blocks Native server startup rather than falling back
   }),{code:'NATIVE_MIGRATION_LINEAGE'});
  });
 });
+
+test('a verified private Native save survives removal of obsolete upstream checkout data',async()=>{
+ await fixture(async x=>{
+  const input={upstreamRoot:x.upstreamRoot,privateRoot:x.privateRoot,indexFile:x.indexFile};
+  await ensureOwnedNativeSessions(input);
+  await rm(x.source,{recursive:true,force:true});
+  assert.deepEqual(await ensureOwnedNativeSessions(input),{migrated:0,existing:1});
+  const state=JSON.parse(await readFile(join(x.privateRoot,'agent_runs',id,'world_state.json'),'utf8'));
+  assert.equal(state.revision,2);
+ });
+});
+test('after upstream source removal, truncated or altered private history is rejected',async()=>{
+ await fixture(async x=>{
+  const input={upstreamRoot:x.upstreamRoot,privateRoot:x.privateRoot,indexFile:x.indexFile};
+  await writeFile(join(x.source,'world_history.json'),JSON.stringify({world_simulation_session_id:id,turns:[{turn_id:'committed-source'}]}));
+  await ensureOwnedNativeSessions(input);
+  await rm(x.source,{recursive:true,force:true});
+  const target=join(x.privateRoot,'agent_runs',id,'world_history.json');
+  await writeFile(target,JSON.stringify({world_simulation_session_id:id,turns:[]}));
+  await assert.rejects(ensureOwnedNativeSessions(input),{code:'NATIVE_MIGRATION_CONFLICT'});
+ });
+});

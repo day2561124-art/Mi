@@ -38,11 +38,29 @@ async function migrationReceipt(file){
  try{return JSON.parse(await readFile(file,'utf8'));}
  catch(e){if(e.code==='ENOENT')return null;throw e;}
 }
-async function saveMigrationReceipt(file,id,fingerprint){
+async function saveMigrationReceipt(file,id,fingerprint,source){
+ const state=JSON.parse(await readFile(join(source,'world_state.json'),'utf8'));
+ const history=JSON.parse(await readFile(join(source,'world_history.json'),'utf8'));
+ if(!Number.isSafeInteger(state.revision)||!Array.isArray(history.turns))
+  throw fail('NATIVE_MIGRATION_LINEAGE','來源世界的歷史基準無效。');
+ const receipt={version:2,session_id:id,source_fingerprint:fingerprint,
+  baseline_revision:state.revision,baseline_turn_count:history.turns.length,
+  baseline_history_hash:hash(JSON.stringify(history.turns))};
  await mkdir(dirname(file),{recursive:true});
  const h=await open(file,'wx',0o600);
- try{await h.writeFile(JSON.stringify({version:1,session_id:id,source_fingerprint:fingerprint}));await h.sync();}
+ try{await h.writeFile(JSON.stringify(receipt));await h.sync();}
  finally{await h.close();}
+}
+async function requireReceiptContinuation(receipt,target){
+ if(receipt.version!==2||!Number.isSafeInteger(receipt.baseline_revision)
+   ||!Number.isSafeInteger(receipt.baseline_turn_count)||typeof receipt.baseline_history_hash!=='string')
+   throw fail('NATIVE_MIGRATION_CONFLICT','私有世界缺少可核對的歷史基準。');
+ const state=JSON.parse(await readFile(join(target,'world_state.json'),'utf8'));
+ const history=JSON.parse(await readFile(join(target,'world_history.json'),'utf8'));
+ if(!Number.isSafeInteger(state.revision)||state.revision<receipt.baseline_revision
+   ||!Array.isArray(history.turns)||history.turns.length<receipt.baseline_turn_count
+   ||hash(JSON.stringify(history.turns.slice(0,receipt.baseline_turn_count)))!==receipt.baseline_history_hash)
+  throw fail('NATIVE_MIGRATION_CONFLICT','米花私有世界的已提交歷史發生回退或遭修改。');
 }
 async function requireAppendOnlyContinuation(source,target){
  const srcHistory=JSON.parse(await readFile(join(source,'world_history.json'),'utf8'));
@@ -81,13 +99,17 @@ export async function ensureOwnedNativeSessions({upstreamRoot,privateRoot,indexF
     const current=await verified(target,id);
     const receipt=await migrationReceipt(receiptFile);
     if(receipt){
-     if(receipt.version!==1||receipt.session_id!==id||!hasOld
-       ||receipt.source_fingerprint!==original)
-       throw fail('NATIVE_MIGRATION_CONFLICT','舊資料來源與遷移證明不一致。');
-     await requireAppendOnlyContinuation(source,target);
+     if(receipt.session_id!==id)
+      throw fail('NATIVE_MIGRATION_CONFLICT','遷移證明與角色腦回合身分不符。');
+     await requireReceiptContinuation(receipt,target);
+     if(hasOld){
+      if(receipt.source_fingerprint!==original)
+       throw fail('NATIVE_MIGRATION_CONFLICT','舊來源資料與遷移證明不一致。');
+      await requireAppendOnlyContinuation(source,target);
+     }
     }else if(hasOld){
      if(original!==current)throw fail('NATIVE_MIGRATION_CONFLICT','缺少遷移證明且新舊存檔不一致。');
-     await saveMigrationReceipt(receiptFile,id,original);
+     await saveMigrationReceipt(receiptFile,id,original,source);
     }
     existing++;continue;
    }
@@ -98,7 +120,7 @@ export async function ensureOwnedNativeSessions({upstreamRoot,privateRoot,indexF
     if(original!==await verified(stage,id))throw fail('NATIVE_MIGRATION_VERIFY','搬移後雜湊不一致。');
     if(await exists(target))throw fail('NATIVE_MIGRATION_CONFLICT','目的地已被其他程序建立。');
     await rename(stage,target);
-    await saveMigrationReceipt(receiptFile,id,original);
+    await saveMigrationReceipt(receiptFile,id,original,source);
     migrated++;
    }finally{await rm(stage,{recursive:true,force:true}).catch(()=>{});}
   }

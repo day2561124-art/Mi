@@ -37,4 +37,5 @@ jobs:
           name: beika-native-cpu-profiles
           path: .profiles/*.cpuprofile
           if-no-files-found: error
+          include-hidden-files: true
           retention-days: 3

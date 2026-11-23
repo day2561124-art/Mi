@@ -50,3 +50,13 @@ CPU 佔用可幫助區分計算與等待，記憶成長可協助評估資料放�
 - CPU profile 的 self 排名可指出在樣本中「落在哪個函式」；inclusive 排名是祖先堆疊被取樣的時間，**不同函式的 inclusive 百分比不可相加**。函式排名不是因果證明，若要改動上游需搭配明確重複呼叫、狀態版本、hash/receipt 一致性與同固定 SHA 實驗。
 - `tests/native-cpu-profiler.test.mjs` 驗證 V8 取樣器輸出、self/inclusive 權重、絕對路徑遮罩及無上游時的快速測試。GitHub `Pinned wRITE Native Endurance` 會使用此 opt-in 觀察模式；先保留既有 8 輪、24 回合、3 人記憶隔離、兩次重啟、Phase63C 行動對照的強制驗收。
 
+
+## Rebuild 0.19：Phase82A 重複歷史深拷貝修補的 A/B 驗收
+
+- 通用上游 [wRITE PR #58](https://github.com/day2561124-art/wRITE/pull/58) 通過受影響驗證、Windows/Ubuntu smoke，已合併為 `cbbd76f5eece4d2a4750b356880a3c4c569bff2b`。Mi 僅固定此合併 SHA，不把米花私有 NPC/世界存檔移入通用上游。
+- 原版 `a08f2dd`：[Mi PR #23 CPU profiling](https://github.com/day2561124-art/Mi/actions/runs/45164847945)，第八輪耗時 **104,014 ms**；Phase82A `historyPrefix → cloneJson` **58,178 ms / 55.9% V8 取樣**。
+- 修補候選 `2573f14`：[Mi PR #24 實驗性 pin CI](https://github.com/day2561124-art/Mi/actions/runs/45166546685)，第八輪耗時 **58,750 ms**；同函式 **11,759 ms / 20.0% V8 取樣**。一組 GitHub 執行器觀察到的第八輪 wall time 降幅約 43.5%，並非所有硬體都保證這個比例。
+- A/B 均使用 Node 22、米花原本的柯南、毛利蘭、灰原哀、8 輪 3 NPC、固定 `wait` 選擇器、2 次重啟、24 個角色回合、相同的測試程式與 CPU profile 設定。修補版通過所有 24 筆回執驗證、角色主觀記憶隔離及 Phase63C 實際檢索影響下一動作。
+- **不能結案的原因：** 第八輪仍是第一輪的 59.2×。修補後取樣的剩餘高成本包含 `cloneJson`（20.0%）、世界歷史 `readJson`（16.7%）、序列化/字串解碼（約 13.3%）及 GC（12.0%）；排名與歸因仍需要分離實驗。當前 300× guard 是災難級退步警戒，不代表放置模擬的速度已達標。
+- 本次保留每個歷史回合的 Phase81Q/Phase81P 來源重驗；只是每次 Phase82A 建構先建立一次完全獨立的 JSON 正規化歷史快照，隨後在其內部用前綴陣列視圖查證，避免對日益增長的前綴重複做 JSON stringify/parse。沒有截斷歷史、沒有繞過信念/記憶形成與因果提交。
+

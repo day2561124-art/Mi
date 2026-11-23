@@ -192,6 +192,12 @@ Phase63C 有新的 `episodic_action_experience` 來源檢索條件，不能把�
 - 只確認上游 Native 計算瓶頸，不改寫角色記憶或因果提交，不宣稱效能問題已修好。
 - 詳細說明與量測限制見 [Native 長跑效能分析](docs/NATIVE-PERFORMANCE-PROFILE.md)，追蹤 [Issue #14](https://github.com/day2561124-art/Mi/issues/14)。
 
+## Rebuild 0.19：Phase82A 歷史深拷貝效能修補
+
+- 固定已合併的通用 `wRITE` PR #58（`cbbd76f5`），在 Phase82A 每次建立時保留一份獨立且經 JSON 正規化的歷史快照，減少對每個逐步增長的歷史前綴重複深層複製。
+- 三名原著 NPC、八輪的受控實測，第 8 輪由約 104 秒降至約 59 秒；測試中仍驗證 24 筆回執、兩次重啟與 Phase63C 記憶對後續行動的作用。此為單組 GitHub runner 比對，非普遍保證。
+- 效能尚未達到長期放置所需的水準，第 8 輪仍為第 1 輪約 59 倍，Issue #14 繼續開啟。詳見 [Native 效能分析](docs/NATIVE-PERFORMANCE-PROFILE.md)。
+
 ## 工程紀錄歸屬與上游同步
 
 - 只在 `Mi` 保存米花原著人物、遊戲時間線、劇情、角色記憶與專屬長跑測試；目前使用柯南、毛利蘭、灰原哀進行原生介面測試，固定規則的選擇器**不代表**已驗證角色完全自主。

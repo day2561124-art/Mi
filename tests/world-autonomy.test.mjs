@@ -201,7 +201,7 @@ test('Scheduler prevents overlapping scans and lets World B finish while World A
   await ready;
   try {
     const duplicate = await scheduler.tickOnce();
-    assert.equal(duplicate.skipped, 'busy');
+    assert.equal(duplicate.processed, 0, 'already-running worlds cannot receive duplicate turns');
     const bProgress = await Promise.race([
       (async () => {
         for (let i = 0; i < 20; i++) {
@@ -284,4 +284,169 @@ test('A disconnected Native world remains frozen while ordinary worlds still adv
   assert.ok(result.errors.some(x => x.world_id === native.world.id && x.code === 'BRAIN_SELECTOR_NOT_CONFIGURED'));
   assert.deepEqual(incidents, result.errors);
   scheduler.stop();
+}));
+
+
+test('A stalled Native World never blocks B/C for three later scheduler intervals', () => workspace(async root => {
+  let time = 1_900_000_000_000;
+  let releaseBrain, signalStarted;
+  const gate = new Promise(resolve => { releaseBrain = resolve; });
+  const started = new Promise(resolve => { signalStarted = resolve; });
+  const { brain } = nativeMock();
+  const normalDecide = brain.decide;
+  let blockedLineage = null, outstanding = 0, peak = 0;
+  brain.decide = async packet => {
+    if (packet.world_id === blockedLineage) {
+      outstanding++;
+      peak = Math.max(peak, outstanding);
+      signalStarted();
+      try { await gate; } finally { outstanding--; }
+    }
+    return normalDecide(packet);
+  };
+
+  const store = createWorldStore({ root, now: () => time, brain });
+  const a = await active(store, 'A stuck Native');
+  let b = await store.create('B independent routines');
+  b = await store.mutate(b.world.id, command(b, 'enable-b-routines', 'pause', { paused: false }));
+  let c = await store.create('C independent routines');
+  c = await store.mutate(c.world.id, command(c, 'enable-c-routines', 'pause', { paused: false }));
+  blockedLineage = 'srv_' + createHash('sha256').update(JSON.stringify(a.world.id)).digest('hex').slice(0, 48);
+  const scheduler = createWorldAutonomyScheduler({ store, now: () => time, maxWorlds: 3, maxActors: 1 });
+  const until = async (id, minute) => {
+    for (let i = 0; i < 250; i++) {
+      const state = await store.get(id);
+      if (state.world.minutes === minute) return state;
+      await new Promise(resolve => setTimeout(resolve, 10));
+    }
+    throw new Error('World ' + id + ' failed to advance to ' + minute);
+  };
+
+  time += 10_000;
+  const stalled = scheduler.tickOnce();
+  await started;
+  try {
+    await Promise.all([until(b.world.id, 10), until(c.world.id, 10)]);
+    for (let interval = 2; interval <= 4; interval++) {
+      time += 10_000;
+      const next = await scheduler.tickOnce();
+      assert.equal(next.processed, 2, 'B and C both advance even while A is stalled');
+      assert.deepEqual(next.errors, []);
+      assert.equal((await store.get(b.world.id)).world.minutes, interval * 10);
+      assert.equal((await store.get(c.world.id)).world.minutes, interval * 10);
+      assert.equal((await store.get(a.world.id)).world.minutes, 0);
+      assert.equal(scheduler.activeWorlds, 1, 'only A remains in flight');
+      assert.equal(peak, 1, 'A must never run simultaneous Native turns');
+    }
+  } finally { releaseBrain(); }
+
+  const first = await stalled;
+  assert.equal(first.processed, 3);
+  assert.equal((await store.get(a.world.id)).world.minutes, 10);
+  assert.equal(scheduler.activeWorlds, 0);
+  assert.equal((await scheduler.tickOnce()).processed, 0, 'repeating without new wall time is safe');
+  time += 10_000;
+  const resumed = await scheduler.tickOnce();
+  assert.equal(resumed.processed, 3);
+  assert.equal((await store.get(a.world.id)).world.minutes, 20);
+  assert.equal((await store.get(b.world.id)).world.minutes, 50);
+  assert.equal((await store.get(c.world.id)).world.minutes, 50);
+  assert.equal(peak, 1);
+}));
+
+test('Scheduler capacity and rotating cursor stay bounded when the first worker hangs', async () => {
+  let time = 1_900_000_000_000;
+  let releaseA, signalA;
+  const gate = new Promise(resolve => { releaseA = resolve; });
+  const ready = new Promise(resolve => { signalA = resolve; });
+  const minutes = { a: 0, b: 0, c: 0 };
+  const stamps = { a: time, b: time, c: time };
+  const calls = { a: 0, b: 0, c: 0 };
+  let concurrent = 0, peak = 0;
+  const store = {
+    list: async () => ['a','b','c'].map(id => ({ id })),
+    get: async id => ({
+      world: { paused: false, brainEnabled: id === 'a', speed: 1, savedAt: stamps[id] },
+      revision: calls[id], hash: 'test',
+    }),
+    reconcile: async id => ({ revision: calls[id], hash: 'test' }),
+    autonomousTick: async (id, input) => {
+      concurrent++; peak = Math.max(peak, concurrent);
+      try {
+        assert.equal(id, 'a');
+        signalA();
+        await gate;
+        calls[id]++;
+        minutes[id] += input.minutes;
+        stamps[id] = time;
+        return { decisions: [] };
+      } finally { concurrent--; }
+    },
+    mutate: async (id, input) => {
+      concurrent++; peak = Math.max(peak, concurrent);
+      try {
+        assert.notEqual(id, 'a');
+        calls[id]++;
+        minutes[id] += input.args.minutes;
+        stamps[id] = time;
+        return {};
+      } finally { concurrent--; }
+    },
+  };
+  const scheduler = createWorldAutonomyScheduler({ store, now: () => time, maxWorlds: 2, maxActors: 1 });
+  time += 10_000;
+  const blocked = scheduler.tickOnce();
+  await ready;
+  try {
+    assert.equal(scheduler.activeWorlds, 1);
+    time += 10_000;
+    assert.equal((await scheduler.tickOnce()).processed, 1, 'free slot rotates to C');
+    assert.equal(minutes.c, 20);
+    time += 10_000;
+    assert.equal((await scheduler.tickOnce()).processed, 1, 'free slot rotates back to B');
+    assert.equal(minutes.b, 30);
+    time += 10_000;
+    assert.equal((await scheduler.tickOnce()).processed, 1);
+    assert.equal(minutes.c, 40);
+    assert.equal(calls.a, 0, 'no overlapping dispatch for stalled A');
+    assert.equal(scheduler.activeWorlds, 1);
+    assert.ok(peak <= 2, 'global scheduler capacity must never be exceeded');
+  } finally { releaseA(); }
+  await blocked;
+  assert.equal(calls.a, 1);
+  assert.equal(scheduler.activeWorlds, 0);
+});
+
+
+test('Manual command for a stalled Native World stays serialized and rejects stale revision', () => workspace(async root => {
+  let time = 1_900_000_000_000, signalStarted, release;
+  const started = new Promise(resolve => { signalStarted = resolve; });
+  const gate = new Promise(resolve => { release = resolve; });
+  const { brain } = nativeMock();
+  const regular = brain.decide;
+  let blockedLineage;
+  brain.decide = async request => {
+    if (request.world_id === blockedLineage) { signalStarted(); await gate; }
+    return regular(request);
+  };
+  const store = createWorldStore({ root, now: () => time, brain });
+  const world = await active(store, 'Serial manual and Native');
+  blockedLineage = 'srv_' + createHash('sha256').update(JSON.stringify(world.world.id)).digest('hex').slice(0, 48);
+  const scheduler = createWorldAutonomyScheduler({ store, now: () => time, maxWorlds: 1, maxActors: 1 });
+  time += 10_000;
+  const pending = scheduler.tickOnce();
+  await started;
+  const manual = store.mutate(world.world.id, command(world, 'manual-while-native-held', 'advance', { minutes: 15, manual: true }));
+  let manualSettled = false;
+  void manual.then(() => { manualSettled = true; }, () => { manualSettled = true; });
+  await new Promise(resolve => setImmediate(resolve));
+  assert.equal(manualSettled, false, 'manual writes must not bypass the WorldStore queue');
+  assert.equal((await scheduler.tickOnce()).processed, 0, 'no duplicate scheduler work for the same World');
+  try {
+    assert.equal((await store.get(world.world.id)).world.minutes, 0);
+  } finally { release(); }
+  await pending;
+  await assert.rejects(manual, { code: 'WORLD_STALE_REVISION' });
+  assert.equal((await store.get(world.world.id)).world.minutes, 10);
+  assert.equal(scheduler.activeWorlds, 0);
 }));

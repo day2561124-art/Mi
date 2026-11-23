@@ -5,7 +5,7 @@
 - 原正式站：https://beika-stage.merebeacon.chatgpt.site/
 - Sites project ID：`appgprj_6affa67227cc8191aeb0a29b451af36a`
 - 本儲存庫：https://github.com/day2561124-art/Mi
-- 目前重作版本：`Rebuild 0.8`
+- 目前套件版本：`0.14.0`（以 `package.json` 為準；上游依賴有後續獨立 PR，未公開部署）
 
 ## 已實作
 
@@ -160,3 +160,10 @@ Phase63C 有新的 `episodic_action_experience` 來源檢索條件，不能把�
 ## Rebuild 0.14：Native 歷史讀取與成本追蹤
 
 正常 Native 決策改為先持久保存 `inflight_event_id`，避免米花橋接每回合額外重讀整份上游歷史；舊索引及崩潰復原仍需查詢正式上游歷史。索引採原子發布、檔案同步與支援平台的目錄同步，不改動 `wRITE` 內部記憶及歷史。長跑測試新增 `BEIKA_NATIVE_PHASE_TIMES`，逐輪量測上游呼叫與時間成本。此修正僅針對米花多餘的讀取，不能在測量前宣稱已解決上游隨歷史累積的效能問題。
+
+
+## 工程紀錄歸屬與上游同步
+
+- 只在 `Mi` 保存米花原著人物、遊戲時間線、劇情、角色記憶與專屬長跑測試；目前使用柯南、毛利蘭、灰原哀進行原生介面測試，固定規則的選擇器**不代表**已驗證角色完全自主。
+- `wRITE` 只維護通用認知與 World 因果機制。跨儲存庫問題可以引用最少量可公開的測試證據，但不得把米花情節、角色存檔或個別工程流水帳遷入通用角色腦。詳見 `docs/PROJECT-BOUNDARIES.md`。
+- 上游 Phase82A 歷史複製修正已在先前主線完成；這次僅同步上游 PR #43 的 JSON 讀取優化，必須通過米花原生長跑後才合併。

@@ -2,11 +2,10 @@
 
 ## 來源與權責
 
-- 上游：`https://github.com/day2561124-art/wRITE`，git submodule 鎖定提交 `f6a929162082975ab7800ff7ced02438186c649b`。
-- 米花：`https://github.com/day2561124-art/Mi`。
-- 不複製上游演算法，也不自行宣稱已實作上游完整 Native Loop。
-- 目前接的是 **正式 wRITE 的 direct capability runtime**：`world_perception_filter` → `world_character_cognition` → `world_action_proposer`。
-- 這是第一階段 integration bridge。尚未導入 `prepareWorldSimulationTurn`/`runWorldSimulationTurn` 的完整 commit/experience replay；`recovered_memories` 明確為空，不把 legacy memory compatibility projector 誤當真正主觀記憶檢索。
+- 上游：`https://github.com/day2561124-art/wRITE`，本專案透過 Git 子模組鎖定到 `87305347fe2a4c39ce855f773e8673d4956066b5`。
+- 米花：`https://github.com/day2561124-art/Mi`。原著角色資料、世界／存檔及專屬長跑證據只歸本儲存庫管理，見 `docs/PROJECT-BOUNDARIES.md`。
+- 使用正式上游的原生 `runWorldSimulationTurn`、世界提交、回執／記憶形成與檢索（需在本機服務中明確啟用）；不是在本專案複製另一份通用角色腦。
+- 下文 Rebuild 0.4 等舊階段說明保留作為歷史研發紀錄，不能當成目前最新功能清單。
 - 角色行動候選來源為米花 World 的地點路網、已知線索與體力約束。World 核心才負責實際位移與存檔，brain 不能自行寫入世界成功結果。
 - 目前 `Mi` 的本地規則仍用於離線、補算與上游未啟用狀態，不能宣稱所有 NPC 已由完整 Character Brain 接管。
 

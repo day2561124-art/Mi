@@ -82,18 +82,22 @@ export function createBrainServer({root=resolve('dist'),bridge=null,worldStore=n
   }catch{return json(404,{error:'NOT_FOUND'});}
  });
 }
+// All storage options are set before any upstream module is imported.
+export async function configureMiUpstreamStorage(env=process.env){
+ const upstreamRoot=resolve(env.WRITE_ROOT||'vendor/wRITE');
+ const privateRoot=resolve(env.MI_WRITE_DATA_ROOT||'.beika-private/write-data');
+ const indexFile=resolve(env.BRAIN_INDEX_FILE||'.beika-private/brain-native-index.json');
+ if(env.BRAIN_NATIVE==='1')await ensureOwnedNativeSessions({upstreamRoot,privateRoot,indexFile});
+ if(process.env.WRITE_DATA_ROOT&&resolve(process.env.WRITE_DATA_ROOT)!==privateRoot)
+  throw Object.assign(new Error('米花角色腦資料目錄衝突。'),{code:'NATIVE_DATA_ROOT_CONFLICT'});
+ process.env.WRITE_DATA_ROOT=privateRoot;
+ return {upstreamRoot,privateRoot,indexFile};
+}
 export async function startBrainServer(env=process.env){
  const port=Number(env.PORT||4173);
  let bridge=null;
  try{
-  const upstreamRoot=resolve(env.WRITE_ROOT||'vendor/wRITE');
-  const privateRoot=resolve(env.MI_WRITE_DATA_ROOT||'.beika-private/write-data');
-  const indexFile=resolve(env.BRAIN_INDEX_FILE||'.beika-private/brain-native-index.json');
-  // Must be set before dynamically importing any upstream module.
-  if(env.BRAIN_NATIVE==='1')await ensureOwnedNativeSessions({upstreamRoot,privateRoot,indexFile});
-  if(process.env.WRITE_DATA_ROOT&&resolve(process.env.WRITE_DATA_ROOT)!==privateRoot)
-   throw Object.assign(new Error('米花角色腦資料目錄衝突。'),{code:'NATIVE_DATA_ROOT_CONFLICT'});
-  process.env.WRITE_DATA_ROOT=privateRoot;
+  const {indexFile}=await configureMiUpstreamStorage(env);
   const chooser=await loadLocalDecider(env);
   if(env.BRAIN_NATIVE==='1'){
    const runtime=await loadNativeRuntime(env.WRITE_ROOT);

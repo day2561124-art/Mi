@@ -368,3 +368,39 @@ test('real pinned wRITE reconciles crash after Phase76 ACK without duplicate out
     assert.equal((await store.reconcile(id)).delivered,0);
   }finally{await rm(root,{recursive:true,force:true});}
 });
+
+test('real upstream boot writes Native World state only to Mi private directory', async t => {
+ if(!process.env.WRITE_ROOT)return t.skip('requires pinned upstream checkout');
+ const {spawnSync}=await import('node:child_process');
+ const {tmpdir}=await import('node:os');
+ const {resolve}=await import('node:path');
+ const privateFixture=await mkdtemp(join(tmpdir(),'mi-runtime-private-'));
+ try {
+  const entry=`
+import assert from 'node:assert/strict';
+import {readFile,access} from 'node:fs/promises';
+import {join,resolve} from 'node:path';
+import {pathToFileURL} from 'node:url';
+import {configureMiUpstreamStorage} from './server/brain-api.mjs';
+const configured=await configureMiUpstreamStorage(process.env);
+const project=join(resolve(process.env.WRITE_ROOT),'server','src');
+const paths=await import(pathToFileURL(join(project,'project-paths.mjs')).href);
+const service=await import(pathToFileURL(join(project,'world-simulation-session-service.mjs')).href);
+assert.equal(paths.projectDataRoot,configured.privateRoot);
+const session=await service.beginWorldSimulationSession({
+ simulation_label:'isolated Mi boot test',
+ initial_world_state:{scenes:{},characters:{},event_queue:[],memories:{},available_actions:{}}
+});
+const id=session.world_simulation_session_id;
+assert.equal(JSON.parse(await readFile(join(configured.privateRoot,'agent_runs',id,'world_state.json'),'utf8')).world_simulation_session_id,id);
+await assert.rejects(access(join(paths.projectRoot,'data','agent_runs',id)),{code:'ENOENT'});
+console.log('BOOT_PRIVATE_SESSION='+id);
+`;
+  const child=spawnSync(process.execPath,['--input-type=module','-e',entry],{
+   cwd:resolve('.'),encoding:'utf8',timeout:90000,env:{...process.env,BRAIN_NATIVE:'1',MI_WRITE_DATA_ROOT:join(privateFixture,'data'),
+    BRAIN_INDEX_FILE:join(privateFixture,'index.json'),WRITE_DATA_ROOT:''}
+  });
+  assert.equal(child.status,0,child.stderr||child.stdout);
+  assert.match(child.stdout,/BOOT_PRIVATE_SESSION=agent_run_/);
+ }finally{await rm(privateFixture,{recursive:true,force:true});}
+});

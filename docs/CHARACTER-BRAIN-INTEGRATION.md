@@ -164,3 +164,12 @@ Mi World committed: ready
 World `reconcile()` 的同一 NPC 回執錯誤不再阻塞同世界其他 NPC；未完成的 `pending` 或 `ready` 行動不允許另開新決策。Native turn 已提交但索引尚未保存時，重試必須利用 World Simulation 正式歷史重建結果，不可再次執行候選選擇。對帳不改變模擬的 `savedAt`。
 
 安全範圍：仍是單一可信的 localhost Node 服務；回執雜湊是可核對證據，不是密碼學簽章或多使用者身分。多程序併行寫入、雲端身分與授權、崩潰硬碟耐久性（含 fsync/資料庫 WAL）、長期經驗學習和跨服務定期修復，尚待另外驗收。
+
+
+## Rebuild 0.14：有記帳保護的 Native 快路徑
+
+- `history_marker_version: 1` 和持久 `inflight_event_id` 保證在執行 Native 之前已有待恢復狀態。
+- 若回合中斷，重新讀正式上游歷史，已提交則回收既有選擇，未提交才安全重試；拒絕用其他事件取代尚未恢復的回合。
+- 缺少新標記的歷史索引會先執行一次舊版完整比對，然後再升級。
+- 上游 Phase63/76、記憶形成、檢索和完整歷史保存皆不變；只消除橋接層健康回合額外的全量歷史讀取。
+- 新增 `BEIKA_NATIVE_PHASE_TIMES` 上游耗時追蹤。未有基準對照前不宣稱改善整體長跑耗時。

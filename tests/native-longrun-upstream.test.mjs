@@ -40,7 +40,21 @@ test('real pinned Native: three independent NPC memories and receipts survive re
   const ticks=Number(process.env.BEIKA_NATIVE_TICKS??8);
   assert.ok(Number.isInteger(ticks)&&ticks>=4&&ticks<=16);
   await fixture('mi-native-endurance-',async root=>{
-    const upstream=await loadNativeRuntime(process.env.WRITE_ROOT);
+    const native=await loadNativeRuntime(process.env.WRITE_ROOT);
+    const phaseStats={};
+    const upstream={...native};
+    for(const name of ['beginWorldSimulationSession','getWorldSimulationState',
+      'getWorldSimulationHistory','commitWorldSimulationTurn','runWorldSimulationTurn']){
+      upstream[name]=async(...args)=>{
+        const started=Date.now();
+        try{return await native[name](...args);}
+        finally{
+          const stat=phaseStats[name]??={calls:0,ms:0};
+          stat.calls++;
+          stat.ms+=Date.now()-started;
+        }
+      };
+    }
     const indexFile=join(root,'index.json'),options={fixtureRoot:join(root,'upstream')};
     const worldRoot=join(root,'worlds'),packets=[];
     const makeBrain=()=>createNativeBrainBridge({upstream,indexFile,sessionOptions:options,
@@ -58,6 +72,7 @@ test('real pinned Native: three independent NPC memories and receipts survive re
     let restarts=0;
     for(let i=0;i<ticks;i++){
       const tickStart=Date.now();
+      const preceding=structuredClone(phaseStats);
       console.log('BEIKA_NATIVE_TICK_START',JSON.stringify({tick:i+1,total:ticks}));
       if(i&&i%3===0){
         store=createWorldStore({root:worldRoot,brain:makeBrain()});
@@ -96,6 +111,9 @@ test('real pinned Native: three independent NPC memories and receipts survive re
       }
       if(i>0)assert.ok(packets.slice(i*3,(i+1)*3).every(p=>
         JSON.stringify(p).includes('post_outcome_action_experience')));
+      const profile=Object.fromEntries(Object.entries(phaseStats).map(([name,item])=>[name,{
+        calls:item.calls-(preceding[name]?.calls??0),ms:item.ms-(preceding[name]?.ms??0)}]));
+      console.log('BEIKA_NATIVE_PHASE_TIMES',JSON.stringify({tick:i+1,elapsedMs:Date.now()-tickStart,profile}));
       console.log('BEIKA_NATIVE_TICK_DONE',JSON.stringify({tick:i+1,worldMinutes:saved.world.minutes,elapsedMs:Date.now()-tickStart}));
     }
     const index=JSON.parse(await readFile(indexFile,'utf8'));

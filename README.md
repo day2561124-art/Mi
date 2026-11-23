@@ -155,3 +155,8 @@ Phase63C 有新的 `episodic_action_experience` 來源檢索條件，不能把�
 
 執行：`WRITE_ROOT=/absolute/path/to/wRITE BEIKA_NATIVE_TICKS=8 npm run native-stress`。
 本機無上游時會明確跳過，正式結論以 GitHub 上游 CI 的結果為準。正式 Sites 保持不動。
+
+
+## Rebuild 0.14：Native 歷史讀取與成本追蹤
+
+正常 Native 決策改為先持久保存 `inflight_event_id`，避免米花橋接每回合額外重讀整份上游歷史；舊索引及崩潰復原仍需查詢正式上游歷史。索引採原子發布、檔案同步與支援平台的目錄同步，不改動 `wRITE` 內部記憶及歷史。長跑測試新增 `BEIKA_NATIVE_PHASE_TIMES`，逐輪量測上游呼叫與時間成本。此修正僅針對米花多餘的讀取，不能在測量前宣稱已解決上游隨歷史累積的效能問題。

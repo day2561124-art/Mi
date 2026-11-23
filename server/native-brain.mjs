@@ -1,8 +1,8 @@
 import { expectedMiAcknowledgement } from './reconciliation-ledger.mjs';
 import { createMiPhase76Receipt, readMiPhase76Observations, phase76Available } from './post-outcome.mjs';
 import { createMiMemoryRetrievalResolver } from './memory-retrieval.mjs';
-import { createHash } from 'node:crypto';
-import { mkdir, readFile, rename, writeFile } from 'node:fs/promises';
+import { createHash, randomUUID } from 'node:crypto';
+import { mkdir, readFile, rename, unlink, open } from 'node:fs/promises';
 import { dirname, join, resolve } from 'node:path';
 import { pathToFileURL } from 'node:url';
 
@@ -145,9 +145,22 @@ async function readIndex(file) {
 }
 async function saveIndex(file, payload) {
   await mkdir(dirname(file), { recursive: true });
-  const temporary = `${file}.${process.pid}.tmp`;
-  await writeFile(temporary, `${JSON.stringify(payload, null, 2)}\n`, { mode: 0o600 });
-  await rename(temporary, file);
+  const temporary = `${file}.${process.pid}.${randomUUID()}.tmp`;
+  try {
+    const handle = await open(temporary, 'wx', 0o600);
+    try { await handle.writeFile(`${JSON.stringify(payload, null, 2)}\n`); await handle.sync(); }
+    finally { await handle.close(); }
+    await rename(temporary, file);
+    // Persist the inflight marker before invoking Native. Directory fsync
+    // is supported on POSIX; a single-process index is still required.
+    if (process.platform !== 'win32') {
+      const directory = await open(dirname(file), 'r');
+      try { await directory.sync(); } finally { await directory.close(); }
+    }
+  } catch (error) {
+    await unlink(temporary).catch(() => {});
+    throw error;
+  }
 }
 
 export function validateNativeFeedback(input, selection) {
@@ -224,7 +237,7 @@ export function createNativeBrainBridge({ upstream, decider, memoryRetrievalReso
         initial_world_state: state,
       }, sessionOptions);
       sessionId = session.world_simulation_session_id;
-      index.worlds[input.world_id] = { session_id: sessionId, last_world_minute: -1 };
+      index.worlds[input.world_id] = { session_id: sessionId, last_world_minute: -1, history_marker_version: 1, inflight_event_id: null };
       // Do not lose an initialized session when the process exits before the turn.
       await saveIndex(indexFile, index);
       snapshot = await upstream.getWorldSimulationState(sessionId, sessionOptions);
@@ -238,14 +251,23 @@ export function createNativeBrainBridge({ upstream, decider, memoryRetrievalReso
         observations: readMiPhase76Observations(item.post_outcome_receipt, upstream, character) }));
     const projected = nativeWorldProjection(input, snapshot.state, undelivered, canonicalObservations);
     const eventId = projected.event_queue[0].event_id;
-    const priorHistory = await upstream.getWorldSimulationHistory(sessionId, sessionOptions);
-    const previous = (priorHistory.turns || []).find(t => t?.event?.event_id === eventId && (t?.selected_action_intents || []).length > 0);
+    // Avoid redundant full-history reads on healthy turns; the durable
+    // inflight marker preserves crash recovery and legacy indexes scan once.
+    const active = index.worlds[input.world_id];
+    if (active?.inflight_event_id && active.inflight_event_id !== eventId) {
+      throw fail('NATIVE_PREVIOUS_TURN_UNRESOLVED', '上一個角色回合尚未恢復，不能改用另一筆行動覆蓋。');
+    }
+    const needsHistoryRecovery = active?.history_marker_version !== 1 || active?.inflight_event_id === eventId;
+    const previous = needsHistoryRecovery
+      ? ((await upstream.getWorldSimulationHistory(sessionId, sessionOptions)).turns || [])
+        .find(t => t?.event?.event_id === eventId && (t?.selected_action_intents || []).length > 0)
+      : null;
     if (previous) {
       const picked = previous.selected_action_intents?.find(x => x.character === `${input.observer.name} (${input.actor_id})`);
       const actionId = picked?.selection === 'reject_all' ? null : (picked?.action_id ?? null);
       const decisionId=actionId?digest({world_id:input.world_id,actor_id:input.actor_id,world_minute:input.world_minute,fingerprint,action_id:actionId}):null;
       const response = { action_id: actionId, decision_id:decisionId, status: actionId ? 'selected' : 'rejected', actor_id: input.actor_id, world_minute: input.world_minute, mode: 'native_turn', committed: true, recovered: true };
-      const nextEntry={...index.worlds[input.world_id],session_id:sessionId,last_world_minute:input.world_minute,fingerprint,last_response:response};
+      const nextEntry={...index.worlds[input.world_id],session_id:sessionId,last_world_minute:input.world_minute,fingerprint,last_response:response,history_marker_version:1,inflight_event_id:null};
       if(decisionId)rememberSelection(nextEntry,input,fingerprint,actionId,decisionId);
       for(const feedback of nextEntry.feedback||[])if(undelivered.some(x=>x.decision_id===feedback.decision_id))feedback.delivered_in=eventId;
       index.worlds[input.world_id]=nextEntry;
@@ -266,6 +288,9 @@ export function createNativeBrainBridge({ upstream, decider, memoryRetrievalReso
         knowledge_transitions: [],
       }, sessionOptions);
     }
+    // The marker must be durable before the wRITE transaction begins.
+    index.worlds[input.world_id] = { ...index.worlds[input.world_id], history_marker_version: 1, inflight_event_id: eventId };
+    await saveIndex(indexFile, index);
     const offered = new Set(input.actions.map(a => a.action_id));
     const selections = [];
     const outcome = await upstream.runWorldSimulationTurn({ world_simulation_session_id: sessionId, event_id: eventId }, {
@@ -304,7 +329,7 @@ export function createNativeBrainBridge({ upstream, decider, memoryRetrievalReso
     const actionId = selections[0] ?? null;
     const decisionId=actionId?digest({world_id:input.world_id,actor_id:input.actor_id,world_minute:input.world_minute,fingerprint,action_id:actionId}):null;
     const response = { action_id: actionId, decision_id:decisionId, status: actionId ? 'selected' : 'rejected', actor_id: input.actor_id, world_minute: input.world_minute, mode: 'native_turn', committed: true };
-    const nextEntry={...index.worlds[input.world_id],session_id:sessionId,last_world_minute:input.world_minute,fingerprint,last_response:response};
+    const nextEntry={...index.worlds[input.world_id],session_id:sessionId,last_world_minute:input.world_minute,fingerprint,last_response:response,history_marker_version:1,inflight_event_id:null};
     if(decisionId)rememberSelection(nextEntry,input,fingerprint,actionId,decisionId);
     for(const feedback of nextEntry.feedback||[])if(undelivered.some(x=>x.decision_id===feedback.decision_id))feedback.delivered_in=eventId;
     index.worlds[input.world_id]=nextEntry;

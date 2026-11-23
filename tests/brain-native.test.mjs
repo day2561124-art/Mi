@@ -199,3 +199,59 @@ test('Native crash after upstream committed turn recovers from history without a
     assert.deepEqual(repeat,result);
   }finally{await rm(root,{recursive:true,force:true});}
 });
+
+test('Native healthy turns avoid history scans, including bridge restarts', async () => {
+  const root=await mkdtemp(join(tmpdir(),'mi-native-history-fast-'));
+  try {
+    const upstream=mockNative(),original=upstream.getWorldSimulationHistory;
+    let reads=0;
+    upstream.getWorldSimulationHistory=async (...a)=>{reads++;return original(...a);};
+    const indexFile=join(root,'index.json'),world=makeWorld('歷史快路徑');
+    for(let i=0;i<5;i++){
+      world.minutes=i*30;
+      const brain=createNativeBrainBridge({upstream,decider:async()=>({action_id:'wait'}),indexFile});
+      assert.equal((await brain.decide(request(world))).committed,true);
+      const e=JSON.parse(await readFile(indexFile,'utf8')).worlds[world.id];
+      assert.equal(e.history_marker_version,1);
+      assert.equal(e.inflight_event_id,null);
+    }
+    assert.equal(reads,0);
+    assert.equal(upstream.counters.ran,5);
+  }finally{await rm(root,{recursive:true,force:true});}
+});
+test('legacy Native sessions check history once before enabling fast path', async () => {
+  const root=await mkdtemp(join(tmpdir(),'mi-native-legacy-fast-'));
+  try{
+    const upstream=mockNative(),original=upstream.getWorldSimulationHistory;
+    let reads=0;
+    upstream.getWorldSimulationHistory=async(...a)=>{reads++;return original(...a);};
+    const indexFile=join(root,'index.json'),world=makeWorld('舊索引');
+    const first=createNativeBrainBridge({upstream,decider:async()=>({action_id:'wait'}),indexFile});
+    await first.decide(request(world));
+    const index=JSON.parse(await readFile(indexFile,'utf8'));
+    delete index.worlds[world.id].history_marker_version;
+    delete index.worlds[world.id].inflight_event_id;
+    await (await import('node:fs/promises')).writeFile(indexFile,JSON.stringify(index));
+    const restored=createNativeBrainBridge({upstream,decider:async()=>({action_id:'wait'}),indexFile});
+    world.minutes=30;await restored.decide(request(world));
+    world.minutes=60;await restored.decide(request(world));
+    assert.equal(reads,1);
+  }finally{await rm(root,{recursive:true,force:true});}
+});
+test('unresolved Native event cannot be overwritten by the next event', async () => {
+  const root=await mkdtemp(join(tmpdir(),'mi-native-inflight-fast-'));
+  try {
+    const upstream=mockNative(),indexFile=join(root,'index.json');
+    const world=makeWorld('進行中');
+    const crashed=createNativeBrainBridge({upstream,decider:async()=>({action_id:'wait'}),indexFile,
+      recoveryHooks:{afterNativeTurnCommit(){throw new Error('simulated crash');}}});
+    await assert.rejects(crashed.decide(request(world)),/simulated crash/);
+    const e=JSON.parse(await readFile(indexFile,'utf8')).worlds[world.id];
+    assert.match(e.inflight_event_id,/^mi_evt_/);
+    world.minutes=30;
+    const restored=createNativeBrainBridge({upstream,decider:async()=>({action_id:'wait'}),indexFile});
+    await assert.rejects(restored.decide(request(world)),{code:'NATIVE_PREVIOUS_TURN_UNRESOLVED'});
+    world.minutes=0;assert.equal((await restored.decide(request(world))).recovered,true);
+    world.minutes=30;assert.equal((await restored.decide(request(world))).committed,true);
+  }finally{await rm(root,{recursive:true,force:true});}
+});

@@ -69,3 +69,11 @@ CPU 佔用可幫助區分計算與等待，記憶成長可協助評估資料放�
 - 第八輪 `readJson` self CPU 取樣約從 9,918 ms 降至 6,313 ms；Phase82A 深拷貝仍約 8,898 ms、垃圾回收約 5,664 ms，皆須繼續定位其因果成本。
 - **未解決：** 候選版第八輪仍約為第一輪 48.6×；單次測速不是充分的長期穩定性證據，Issue #14 保持開啟。下一段優先觀察 Phase82A 重複建構、跨回合歷史讀取及記憶佔用。
 
+
+## Rebuild 0.21：非睡眠回合的歷史讀取短路（wRITE PR #64）
+
+- 上游 [wRITE PR #64](https://github.com/day2561124-art/wRITE/pull/64) 對通用 `commitWorldSimulationTurn` 增加精準分流：**每一次提交仍呼叫** `assertWorldSimulationSleepArousalCommitAuthority`，但只在確實提案 `physical_state.sleep_arousal` 轉換時，才為該驗證器額外讀取整份已提交 World History。沒有提案卻偷偷更改睡眠狀態的提交仍由驗證器拒絕。後續 World History 寫入階段依舊開啟、驗證最新正式歷史；沒有引入跨回合快取。
+- 米花候選 [PR #26](https://github.com/day2561124-art/Mi/pull/26) 使用相同原著角色、Node 22、8 輪、24 筆回執、兩次重啟與 CPU 取樣，在 [CI 45177285314](https://github.com/day2561124-art/Mi/actions/runs/45177285314) 第八輪耗時 **35,299 ms**；上一個已合併上游版本 [CI 45174781333](https://github.com/day2561124-art/Mi/actions/runs/45174781333) 第八輪耗時 **50,206 ms**。兩次各一個 runner 的原始觀測差異約 29.7%。
+- **不能把 29.7% 當作已證明的修補效益**：第一輪候選版約 642 ms，上版為 1,094 ms，顯示測試機器或執行條件可能不同；第八輪相對第一輪仍為候選版 **55.0×**，上版 **45.9×**。CPU 的 `readJson` self 取樣也由約 7,767 ms 降為 4,425 ms，但仍不能排除 CPU/JIT/GC 變異。
+- 此次確認的是確實移除無用的單次解析以及持久化與角色記憶驗證沒有退步，而非達成可長期放置的速度。Issue #14 維持開啟，下一個高成本來源仍是 Phase82A 重複歷史重建與整體狀態解析。
+

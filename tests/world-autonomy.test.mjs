@@ -416,3 +416,37 @@ test('Scheduler capacity and rotating cursor stay bounded when the first worker 
   assert.equal(calls.a, 1);
   assert.equal(scheduler.activeWorlds, 0);
 });
+
+
+test('Manual command for a stalled Native World stays serialized and rejects stale revision', () => workspace(async root => {
+  let time = 1_900_000_000_000, signalStarted, release;
+  const started = new Promise(resolve => { signalStarted = resolve; });
+  const gate = new Promise(resolve => { release = resolve; });
+  const { brain } = nativeMock();
+  const regular = brain.decide;
+  let blockedLineage;
+  brain.decide = async request => {
+    if (request.world_id === blockedLineage) { signalStarted(); await gate; }
+    return regular(request);
+  };
+  const store = createWorldStore({ root, now: () => time, brain });
+  const world = await active(store, 'Serial manual and Native');
+  blockedLineage = 'srv_' + createHash('sha256').update(JSON.stringify(world.world.id)).digest('hex').slice(0, 48);
+  const scheduler = createWorldAutonomyScheduler({ store, now: () => time, maxWorlds: 1, maxActors: 1 });
+  time += 10_000;
+  const pending = scheduler.tickOnce();
+  await started;
+  const manual = store.mutate(world.world.id, command(world, 'manual-while-native-held', 'advance', { minutes: 15, manual: true }));
+  let manualSettled = false;
+  void manual.then(() => { manualSettled = true; }, () => { manualSettled = true; });
+  await new Promise(resolve => setImmediate(resolve));
+  assert.equal(manualSettled, false, 'manual writes must not bypass the WorldStore queue');
+  assert.equal((await scheduler.tickOnce()).processed, 0, 'no duplicate scheduler work for the same World');
+  try {
+    assert.equal((await store.get(world.world.id)).world.minutes, 0);
+  } finally { release(); }
+  await pending;
+  await assert.rejects(manual, { code: 'WORLD_STALE_REVISION' });
+  assert.equal((await store.get(world.world.id)).world.minutes, 10);
+  assert.equal(scheduler.activeWorlds, 0);
+}));

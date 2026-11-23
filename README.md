@@ -186,6 +186,12 @@ Phase63C 有新的 `episodic_action_experience` 來源檢索條件，不能把�
 - 設有極寬鬆的嚴重性能退步測試門檻，不能將通過視作長期放置模擬的效能已達標。
 - 研究證據、版本差異及下一步完整紀錄在 [Native 效能分析](docs/NATIVE-PERFORMANCE-PROFILE.md)；追蹤於 [Issue #14](https://github.com/day2561124-art/Mi/issues/14)。
 
+## Rebuild 0.18：CPU 函式層級診斷
+
+- GitHub 長跑驗收另外對第 1 與第 8 輪使用 Node V8 CPU Profiler，輸出脫敏後的函式 self/inclusive 取樣排名；遊戲執行路徑不啟用。
+- 只確認上游 Native 計算瓶頸，不改寫角色記憶或因果提交，不宣稱效能問題已修好。
+- 詳細說明與量測限制見 [Native 長跑效能分析](docs/NATIVE-PERFORMANCE-PROFILE.md)，追蹤 [Issue #14](https://github.com/day2561124-art/Mi/issues/14)。
+
 ## 工程紀錄歸屬與上游同步
 
 - 只在 `Mi` 保存米花原著人物、遊戲時間線、劇情、角色記憶與專屬長跑測試；目前使用柯南、毛利蘭、灰原哀進行原生介面測試，固定規則的選擇器**不代表**已驗證角色完全自主。

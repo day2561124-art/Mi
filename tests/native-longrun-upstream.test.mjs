@@ -6,6 +6,7 @@ import { makeWorld } from '../src/core/world.js';
 import { createWorldStore } from '../server/world-store.mjs';
 import { loadNativeRuntime, createNativeBrainBridge } from '../server/native-brain.mjs';
 import { createMiMemoryRetrievalResolver } from '../server/memory-retrieval.mjs';
+import { startNativeCpuProfile } from './native-cpu-profiler.mjs';
 
 const pre = state => ({expected_revision:state.revision, expected_hash:state.hash});
 const contextItems = packet => {
@@ -88,6 +89,11 @@ test('real pinned Native: three independent NPC memories and receipts survive re
       const priorCallbacks=structuredClone(callbackStats);
       const cpuStart=process.cpuUsage();
       console.log('BEIKA_NATIVE_TICK_START',JSON.stringify({tick:i+1,total:ticks}));
+      // CPU sampling is test-only and deliberately limited to the first and
+      // final turns so sampling overhead does not cover the entire endurance run.
+      const stopCpuProfile=process.env.BEIKA_NATIVE_CPU_PROFILE==='1' &&
+        (i===0 || i===ticks-1) ? await startNativeCpuProfile() : null;
+      try {
       if(i&&i%3===0){
         store=createWorldStore({root:worldRoot,brain:makeBrain()});
         saved=await store.get(id);
@@ -141,6 +147,12 @@ test('real pinned Native: three independent NPC memories and receipts survive re
         cpuMs:Math.round((cpu.user+cpu.system)/1000),heapMiB:Math.round(process.memoryUsage().heapUsed/1048576),
         stateBytes,memoryCount,callbacks}));
       console.log('BEIKA_NATIVE_TICK_DONE',JSON.stringify({tick:i+1,worldMinutes:saved.world.minutes,elapsedMs}));
+      } finally {
+        if(stopCpuProfile){
+          const cpuProfile=await stopCpuProfile();
+          console.log('BEIKA_NATIVE_CPU_SAMPLE',JSON.stringify({tick:i+1,...cpuProfile}));
+        }
+      }
     }
     if(ticks>=8){
       const growthRatio=Number((tickTimes.at(-1)/Math.max(1,tickTimes[0])).toFixed(1));

@@ -41,3 +41,12 @@ CPU 佔用可幫助區分計算與等待，記憶成長可協助評估資料放�
 3. 只有辨識確認可免除的重複工作時才提交效能優化；保留記憶、對帳、身分與 CAS 保證。通用 wRITE 的優化需在該上游有可重現、與米花業務無關的效能證據後獨立處理。
 
 本文件沒有更動原 Sites 正式站、沒有用到使用者電腦的存檔，也沒有宣稱 PR #21 已解決這項效能問題。
+
+## Rebuild 0.18：實際 V8 CPU 函式取樣（待 CI 實測）
+
+- 測試專用 `tests/native-cpu-profiler.mjs` 用 Node 22 `node:inspector` 的 V8 `Profiler` 收集 1 ms 級取樣；只有明確設定 `BEIKA_NATIVE_CPU_PROFILE=1`，才對真實 Native 長跑的**第 1 與最後 1 輪**啟用。預設遊戲啟動完全不讀取 profiler。
+- 輸出 `BEIKA_NATIVE_CPU_SAMPLE`，含總樣本時間、各函式 self（落在自身）及 inclusive（抽樣堆疊包含此函式）排名，並單獨整理 `wRITE` 上游函式。路徑一律正規化為相對於 `wRITE/`、`Mi/` 或 Node 內建模組；不印出實際執行者主目錄、私人角色記憶、完整 CPU profile 或世界存檔。
+- `totalSampledMs` 是 V8 時間差取樣，不應與 `process.cpuUsage()` 或整輪 wall time 當成同一種數值。特別是 async 等待、V8 GC、JIT 編譯及 inspector 本身都可能改變觀察結果。
+- CPU profile 的 self 排名可指出在樣本中「落在哪個函式」；inclusive 排名是祖先堆疊被取樣的時間，**不同函式的 inclusive 百分比不可相加**。函式排名不是因果證明，若要改動上游需搭配明確重複呼叫、狀態版本、hash/receipt 一致性與同固定 SHA 實驗。
+- `tests/native-cpu-profiler.test.mjs` 驗證 V8 取樣器輸出、self/inclusive 權重、絕對路徑遮罩及無上游時的快速測試。GitHub `Pinned wRITE Native Endurance` 會使用此 opt-in 觀察模式；先保留既有 8 輪、24 回合、3 人記憶隔離、兩次重啟、Phase63C 行動對照的強制驗收。
+

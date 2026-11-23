@@ -143,3 +143,24 @@ Native session 對應表只保存在伺服器的 `.beika-private/brain-native-in
 收據只能由 Node 內部提供，瀏覽器來源不會生成。新角色可驗證來源，舊資料若缺 actor_name/intent 則降級只讀歷史紀錄，不能標成正式 Phase76。Phase63C 可檢索已形成的 Phase76 行動經驗，不能以候選存在推定已想起來。
 
 由於米花實際因果提交與 wRITE Native Loop 仍是跨儲存域，目前**未**將米花 World commit 偽裝成 wRITE 同一個 Native 事件的 action outcome；完整跨系統 transaction/Experience Receipt 仍須後續工程。
+
+
+## Rebuild 0.11：世界回執、重試與跨系統稽核
+
+跨系統寫入順序固定：
+
+```text
+Mi World committed: ready
+  -> Native ACK durable (Phase76A/76B provenance, actor-bounded)
+  -> Mi verifies deterministic acknowledgement evidence
+  -> Mi World committed: delivered + acknowledgement
+  -> next Native turn consumes source-grounded subjective experience
+```
+
+`server/reconciliation-ledger.mjs` 對結果建立 `receipt_id` 和 `evidence_hash`。World 只會接受與自己已經結算的世界、角色、decision、action、kind、place、world minute 和 `mi_server_verified` 來源完全吻合的收據。對帳失敗不會偷偷視為成功，會回傳 `issues`。已 ACK 但尚未完成本地標記時，World outbox 的 `ready` 紀錄保留，重啟後同一結果重送由 Native inbox 去重；來源不同或結果衝突的重送拒絕。
+
+`GET /api/worlds/<id>/reconciliation-status` 只提供狀態和問題識別，不曝露 Native mind 或未被角色觀察的 World 內容。`legacy` 表示前版本沒有新回執證據的 `delivered` 紀錄，僅相容讀取，不能列入 `verified`。遺失上游回執、稽核工具不可用及雜湊不一致都會明列，且不會自行改寫歷史。
+
+World `reconcile()` 的同一 NPC 回執錯誤不再阻塞同世界其他 NPC；未完成的 `pending` 或 `ready` 行動不允許另開新決策。Native turn 已提交但索引尚未保存時，重試必須利用 World Simulation 正式歷史重建結果，不可再次執行候選選擇。對帳不改變模擬的 `savedAt`。
+
+安全範圍：仍是單一可信的 localhost Node 服務；回執雜湊是可核對證據，不是密碼學簽章或多使用者身分。多程序併行寫入、雲端身分與授權、崩潰硬碟耐久性（含 fsync/資料庫 WAL）、長期經驗學習和跨服務定期修復，尚待另外驗收。

@@ -153,7 +153,11 @@ test('Native feedback is idempotent, scope checked, and appears as unverified ac
   await assert.rejects(bridge.acknowledge({...payload,actor_id:'kaito'}),{code:'BRAIN_FEEDBACK_INVALID'});
   const accepted=await bridge.acknowledge(payload);
   assert.equal(accepted.accepted,true);assert.equal(accepted.duplicate,false);
-  assert.equal((await bridge.acknowledge(payload)).duplicate,true);
+  const secondAck = await bridge.acknowledge(payload);
+  assert.equal(secondAck.duplicate,true);
+  assert.deepEqual(secondAck.acknowledgement, accepted.acknowledgement);
+  assert.equal(accepted.acknowledgement.source, 'mi_client_reported');
+  assert.deepEqual(await bridge.inspectAcknowledgement({world_id:w.id,decision_id:first.decision_id}), accepted.acknowledgement);
   await assert.rejects(bridge.acknowledge({...payload,world_minute:60}),{code:'BRAIN_FEEDBACK_CONFLICT'});
   const restarted=createNativeBrainBridge({upstream,decider:async()=>({action_id:'wait'}),indexFile});
   w.minutes=60;
@@ -167,4 +171,31 @@ test('Native feedback is idempotent, scope checked, and appears as unverified ac
   assert.ok(!JSON.stringify(state.state.memories).includes('本機存檔回報'));
   assert.equal((await restarted.acknowledge(payload)).duplicate,true);
  }finally{await rm(folder,{recursive:true,force:true});}
+});
+
+test('Native crash after upstream committed turn recovers from history without another brain selection', async () => {
+  const root = await mkdtemp(join(tmpdir(), 'mi-native-after-commit-'));
+  try {
+    const upstream = mockNative(), indexFile = join(root, 'native-index.json');
+    const world = makeWorld('上游已提交但橋接尚未記帳');
+    let crash = true, selections = 0;
+    const decider = async () => { selections++; return {action_id:'wait'}; };
+    const interrupted = createNativeBrainBridge({ upstream, decider, indexFile,
+      recoveryHooks: { afterNativeTurnCommit() {
+        if (crash) { crash = false; throw Object.assign(new Error('restart now'),{code:'SIMULATED_POST_NATIVE_COMMIT'}); }
+      } },
+    });
+    const input = request(world);
+    await assert.rejects(interrupted.decide(input), {code:'SIMULATED_POST_NATIVE_COMMIT'});
+    assert.equal(upstream.counters.ran,1);
+    assert.equal(selections,1);
+    const recovered = createNativeBrainBridge({upstream,decider,indexFile});
+    const result = await recovered.decide(input);
+    assert.equal(result.status,'selected');
+    assert.equal(result.recovered,true);
+    assert.equal(upstream.counters.ran,1,'no duplicate upstream Native turn');
+    assert.equal(selections,1,'no duplicate NPC choice');
+    const repeat = await recovered.decide(input);
+    assert.deepEqual(repeat,result);
+  }finally{await rm(root,{recursive:true,force:true});}
 });

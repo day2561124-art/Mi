@@ -1,3 +1,4 @@
+import { expectedMiAcknowledgement } from './reconciliation-ledger.mjs';
 import { createMiPhase76Receipt, readMiPhase76Observations, phase76Available } from './post-outcome.mjs';
 import { createMiMemoryRetrievalResolver } from './memory-retrieval.mjs';
 import { createHash } from 'node:crypto';
@@ -187,7 +188,7 @@ function rememberSelection(entry, input, fingerprint, actionId, decisionId) {
 }
 
 /** One serial native turn per server process; wRITE owns its own durable history. */
-export function createNativeBrainBridge({ upstream, decider, memoryRetrievalResolver = createMiMemoryRetrievalResolver(), sessionOptions = {}, indexFile = resolve('.beika-private/brain-native-index.json') }) {
+export function createNativeBrainBridge({ upstream, decider, memoryRetrievalResolver = createMiMemoryRetrievalResolver(), sessionOptions = {}, indexFile = resolve('.beika-private/brain-native-index.json'), recoveryHooks = {} }) {
   for (const name of ['beginWorldSimulationSession', 'runWorldSimulationTurn', 'createWorldSimulationCharacterRuntimeManager', 'getWorldSimulationState', 'getWorldSimulationHistory', 'commitWorldSimulationTurn']) {
     if (typeof upstream?.[name] !== 'function') throw fail('NATIVE_RUNTIME_INCOMPATIBLE', `缺少上游入口 ${name}`);
   }
@@ -297,6 +298,9 @@ export function createNativeBrainBridge({ upstream, decider, memoryRetrievalReso
       },
     });
     if (!outcome?.committed) throw fail('NATIVE_TURN_UNCOMMITTED', '上游 Native World 回合未完成提交。');
+    // Test-only interruption after the upstream atomic commit. Recovery must
+    // consult its committed event history, not rerun the Character Brain.
+    await recoveryHooks.afterNativeTurnCommit?.({world_id:input.world_id,actor_id:input.actor_id,event_id:eventId});
     const actionId = selections[0] ?? null;
     const decisionId=actionId?digest({world_id:input.world_id,actor_id:input.actor_id,world_minute:input.world_minute,fingerprint,action_id:actionId}):null;
     const response = { action_id: actionId, decision_id:decisionId, status: actionId ? 'selected' : 'rejected', actor_id: input.actor_id, world_minute: input.world_minute, mode: 'native_turn', committed: true };
@@ -321,7 +325,7 @@ export function createNativeBrainBridge({ upstream, decider, memoryRetrievalReso
       if(digest({kind:previous.kind,place_id:previous.place_id,world_minute:previous.world_minute})!==digest(reported))
         throw fail('BRAIN_FEEDBACK_CONFLICT','這次決策已有不同的回饋紀錄。');
       if (previous.source !== source) throw fail('BRAIN_FEEDBACK_SOURCE_CONFLICT','回饋來源與先前紀錄不同');
-      return {ok:true,accepted:true,duplicate:true,source,post_outcome:previous.post_outcome_receipt?'phase76_canonical':'legacy'};
+      return {ok:true,accepted:true,duplicate:true,source,acknowledgement:expectedMiAcknowledgement({ ...previous, world_id:input.world_id }, source),post_outcome:previous.post_outcome_receipt?'phase76_canonical':'legacy'};
     }
     const verified = { ...reported, decision_id: input.decision_id, actor_id: input.actor_id,
       action_id: input.action_id, delivered_in: null, source };
@@ -330,7 +334,7 @@ export function createNativeBrainBridge({ upstream, decider, memoryRetrievalReso
     }
     entry.feedback=[...(entry.feedback||[]),verified].slice(-64);
     await saveIndex(indexFile,index);
-    return {ok:true,accepted:true,duplicate:false,source,post_outcome:verified.post_outcome_receipt?'phase76_canonical':'legacy'};
+    return {ok:true,accepted:true,duplicate:false,source,acknowledgement:expectedMiAcknowledgement({ ...verified, world_id:input.world_id }, source),post_outcome:verified.post_outcome_receipt?'phase76_canonical':'legacy'};
   }
   return {
     acknowledge(input){
@@ -341,6 +345,18 @@ export function createNativeBrainBridge({ upstream, decider, memoryRetrievalReso
     acknowledgeAuthoritative(input){
       const current=lock.catch(()=>{}).then(()=>acknowledge(input, 'mi_server_verified'));
       lock=current.catch(()=>{});return current;
+    },
+    // Internal audit access. This does not perform a write or replay an action.
+    inspectAcknowledgement({ world_id, decision_id }) {
+      const current = lock.catch(() => {}).then(async () => {
+        if (!/^[\w-]{8,128}$/.test(world_id ?? '') || !/^[a-f0-9]{64}$/.test(decision_id ?? ''))
+          throw fail('BRAIN_FEEDBACK_INVALID', '無效的對帳查詢。');
+        const index = await indexPromise;
+        const record = index.worlds[world_id]?.feedback?.find(item => item.decision_id === decision_id);
+        return record ? expectedMiAcknowledgement({ ...record, world_id }, record.source) : null;
+      });
+      lock = current.catch(() => {});
+      return current;
     },
     decide(input) {
       const current = lock.catch(() => {}).then(() => run(input));

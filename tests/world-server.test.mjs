@@ -5,6 +5,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { makeWorld } from '../src/core/world.js';
 import { createWorldStore } from '../server/world-store.mjs';
+import { expectedMiAcknowledgement } from '../server/reconciliation-ledger.mjs';
 import { createBrainServer } from '../server/brain-api.mjs';
 
 const temp = async fn => {
@@ -77,12 +78,12 @@ test('server-derived consequence is delivered to Native adapter only after actua
       assert.equal(request.actor_id, 'conan');
       assert.equal(request.world_minute, 0);
       assert.ok(!JSON.stringify(request).includes('private-world-secret'));
-      return { status: 'selected', action_id: 'wait', decision_id: 'a'.repeat(64) };
+      return { status: 'selected', committed: true, actor_id: request.actor_id, world_minute: request.world_minute, action_id: 'wait', decision_id: 'a'.repeat(64) };
     },
     acknowledgeAuthoritative: async feedback => {
       receipts.push(feedback);
       if (shouldFail) throw new Error('simulated Native outage');
-      return { accepted: true };
+      return { accepted: true, acknowledgement: expectedMiAcknowledgement(feedback) };
     },
   };
   const store = createWorldStore({ root, brain });

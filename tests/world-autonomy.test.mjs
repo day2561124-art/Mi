@@ -5,6 +5,7 @@ import { mkdtemp, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { createWorldStore } from '../server/world-store.mjs';
+import { expectedMiAcknowledgement } from '../server/reconciliation-ledger.mjs';
 import { createWorldAutonomyScheduler } from '../server/world-scheduler.mjs';
 import { advanceWorld, makeWorld } from '../src/core/world.js';
 import { characterActionCatalog, makeBoundedBrainRequest } from '../src/core/brain-bridge.js';
@@ -32,7 +33,7 @@ function nativeMock({failActor = null, choose = () => 'wait'} = {}) {
       return { status: 'selected', committed: true, actor_id: request.actor_id, world_minute: request.world_minute, action_id,
         decision_id: key(request, seen.length) };
     },
-    acknowledgeAuthoritative: async input => { received.push(input); return { accepted: true }; },
+    acknowledgeAuthoritative: async input => { received.push(input); return { accepted: true, acknowledgement: expectedMiAcknowledgement(input) }; },
   };
   return { brain, seen, received };
 }

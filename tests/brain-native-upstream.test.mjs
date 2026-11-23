@@ -283,7 +283,15 @@ test('real Phase63C controlled contrast: the same later decision changes only wh
       // opportunity must not receive a fresh event with identical text.
       await mutate('phase63c-progress-2','advance',{minutes:30,manual:true});
       const before=packets.length;
-      await decide(3);
+      // This is an isolated Phase63C cognition contrast, not an additional
+      // authoritative Mi World action. The second action is deliberately
+      // unacknowledged, so World correctly prohibits a new World decision.
+      // Invoke only the Native decision probe at the same saved clock without
+      // mutating Mi's World state or declaring the prior action successful.
+      const thirdInput={...makeBoundedBrainRequest(saved.world,'conan'),
+        world_id:Object.keys(index.worlds)[0]};
+      const third=await native.decide(thirdInput);
+      assert.equal(third.committed,true);
       assert.equal(packets.length,before+1);
       assert.equal(JSON.stringify(packets[2].perception??{}).includes(MI_PHASE76_EXPERIENCE),false,
         'This third decision must be grounded in memory retrieval, not the record being read again');
@@ -304,4 +312,59 @@ test('real Phase63C controlled contrast: the same later decision changes only wh
     assert.equal(noRetrieval.selectionHistory[2].retrieval?.process_occurred,false);
     assert.ok(noRetrieval.memoryCount>0,'control has memories too, but no successful retrieval');
   } finally {await rm(fixture,{recursive:true,force:true});}
+});
+
+test('real pinned wRITE reconciles crash after Phase76 ACK without duplicate outcome memories', async t => {
+  if (!process.env.WRITE_ROOT) return t.skip('Real wRITE checkout is provided by GitHub upstream CI');
+  const { createWorldStore } = await import('../server/world-store.mjs');
+  const parent = join(process.env.WRITE_ROOT, 'tests', '.tmp');
+  await mkdir(parent, { recursive: true });
+  const root = await mkdtemp(join(parent, 'mi-phase76-crash-recovery-'));
+  try {
+    const upstream = await loadNativeRuntime(process.env.WRITE_ROOT);
+    const sessionOptions = { fixtureRoot: join(root, 'upstream') };
+    const indexFile = join(root, 'native-index.json');
+    const buildNative = () => createNativeBrainBridge({
+      upstream, decider: async () => ({ action_id: 'wait' }), sessionOptions, indexFile,
+    });
+    let native = buildNative();
+    let crash = true;
+    const worldRoot=join(root,'worlds');
+    let store=createWorldStore({root:worldRoot,brain:native,reconciliationHooks:{
+      afterRemoteAck(){ if(crash){crash=false;throw Object.assign(new Error('simulated crash'),{code:'SIMULATED_AFTER_ACK_CRASH'});} },
+    }});
+    let state=await store.create('Native 實際回執復原');
+    const id=state.world.id;
+    const command=(name,type,args)=>store.mutate(id,{operation_id:name,expected_revision:state.revision,expected_hash:state.hash,type,args});
+    state=await command('crash-native-enabled','brain_enabled',{enabled:true});
+    state=await store.decide(id,{operation_id:'crash-intent-1',expected_revision:state.revision,
+      expected_hash:state.hash,actor_id:'conan'});
+    state=await command('crash-world-advance','advance',{minutes:30,manual:true});
+    assert.equal(state.world.brainOutcomes[0].state,'ready');
+    const before=await store.reconcile(id);
+    assert.equal(before.delivered,0);
+    assert.equal(before.pending,1);
+    assert.deepEqual(before.issues.map(x=>x.code),['SIMULATED_AFTER_ACK_CRASH']);
+    const firstIndex=JSON.parse(await readFile(indexFile,'utf8'));
+    const lineage=Object.keys(firstIndex.worlds)[0];
+    assert.equal(firstIndex.worlds[lineage].feedback.length,1,'Native ACK was durably written');
+    native=buildNative();
+    store=createWorldStore({root:worldRoot,brain:native});
+    const resumed=await store.reconcile(id);
+    assert.equal(resumed.delivered,1);
+    assert.equal(resumed.pending,0);
+    const audit=await store.auditReconciliation(id);
+    assert.equal(audit.verified,1);
+    assert.deepEqual(audit.issues,[]);
+    const secondIndex=JSON.parse(await readFile(indexFile,'utf8'));
+    assert.equal(secondIndex.worlds[lineage].feedback.length,1,'retry cannot duplicate Phase76 receipt');
+    const next=await store.decide(id,{operation_id:'crash-intent-2',expected_revision:resumed.revision,
+      expected_hash:resumed.hash,actor_id:'conan'});
+    assert.equal(next.decision.action_id,'wait');
+    const upstreamState=await upstream.getWorldSimulationState(secondIndex.worlds[lineage].session_id,sessionOptions);
+    const actionMemories=(upstreamState.state.memories['江戶川柯南 (conan)']||[]).filter(item=>
+      item.memory_type==='episodic_action_experience' && item.source?.kind==='post_outcome_subjective_experience');
+    assert.equal(actionMemories.length,1,'the recovered Phase76 receipt creates exactly one Native action memory');
+    assert.equal((await store.reconcile(id)).delivered,0);
+  }finally{await rm(root,{recursive:true,force:true});}
 });

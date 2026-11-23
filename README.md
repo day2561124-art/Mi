@@ -111,11 +111,11 @@ npm run build        # 產生 dist/ 靜態站點
 - 新增真實上游 CI 斷言：伺服器世界先產生經驗 → 完成 wRITE 下一個原生回合 → 上游提交新主觀記憶紀錄；另驗證兩人經驗不混用。測試失敗則不可聲稱 Native 學習驗收完成。
 - **已形成主觀記憶 ≠ 自動證明檢索、語義學習或 wRITE 官方 post-outcome Experience Receipt 已完成。** 須另測實際 Phase63C 取回、目標/決策差異與 Phase76 內建的 post-outcome 主觀經驗接線。伺服器尚未具備公網多人安全條件。
 
-## Rebuild 0.10：Phase63C 已有來源的經驗取回
+## Rebuild 0.11：Phase63C 已有來源的經驗取回
 
 `server/memory-retrieval.mjs` 將固定版上游已有的 Phase63C `memoryRetrievalResolver` 接入 Mi Native Loop。它只選取原生 Phase63A 已經編碼、符合下一步思考目標的本角色伺服器驗證行動紀錄；取回由上游執行，不能作者式補寫回憶，也不能把臨時讀取冒充記憶取回。上游 CI 新增已形成記憶但禁止檢索，與允許真實檢索後的第三回合選擇對照。這只是狹義的記憶取回功能，非 Phase76 全面知識學習或長期記憶鞏固。
 
-## Rebuild 0.10：伺服器後果的 Phase76A/76B 正式來源接線
+## Rebuild 0.11：伺服器後果的 Phase76A/76B 正式來源接線
 
 `server/post-outcome.mjs` 使用固定版 `wRITE` 的 Phase76A canonical projection 和 Phase76B hash-verified memory bridge。只有伺服器已結算並經 `acknowledgeAuthoritative` 的結果，且保存了原始 NPC 名稱、動作與決策身分，才能建立收據。結果區分成功抵達、完成查看、未證實與中斷，中斷不能被宣告為已完成。
 
@@ -124,3 +124,15 @@ npm run build        # 產生 dist/ 靜態站點
 Phase63C 有新的 `episodic_action_experience` 來源檢索條件，不能把當回合正在感知的結果同時當回憶。這是受控的跨回合記憶來源流程，不等於 `wRITE` native action commit 已直接擁有米花的 World 實際因果提交，也不代表長期記憶鞏固、獨立學習或無模型的自主決策已完成。
 
 本機需 `npm run check`；正式 Phase76A/B 與兩名 NPC 記憶隔離，必須在 GitHub Actions 以固定版 `vendor/wRITE` 執行 `tests/brain-native-upstream.test.mjs` 驗收。正式站仍需登入授權、跨行程持久鎖與上游安全審核。原 Sites 網站不受本工程影響。
+
+
+## Rebuild 0.11：World × Native 跨系統提交對帳
+
+- 新增 `server/reconciliation-ledger.mjs`。每筆伺服器結算的行動在 Native ACK 之後，必須取得綁定世界、角色、決策、行動、結果、時間和來源的 `receipt_id` 與 `evidence_hash`；這是**伺服器內部對帳識別**，不是簽章，也不代表來自未驗證客戶端的證據已變可靠。
+- World 保存順序為「世界結果 `ready` 已經落盤 → Native inbox 接受回執 → 回執證據核對 → World 標記 `delivered` 並保存證據」。若在 Native ACK 後但 World 保存前中斷，保留 `ready`，重新連接後由 Native 去重回覆同一張回執，再完成 World 提交。若 Native 未接受、回執不符，**不可**標記送達。
+- `GET /api/worlds/<id>/reconciliation-status` 僅於原本 localhost / 同源限制下提供整數統計及錯誤代碼，不包含私有角色內容；報告 `verified`、`ready`、`legacy` 與 `issues`。可偵測已標記完成的上游回執遺失，但**不擅自改寫世界歷史**。舊版沒有 ACK 證據的 `delivered` 紀錄繼續可讀，會標示為 `MI_LEGACY_UNPROVEN_DELIVERY`，不會偽裝成已對帳。
+- NPC 的某項回執失敗會留在待送清單，其他角色可以繼續同步。該 NPC 在 `pending` 或 `ready` 尚未結束時，不會接受下一項新決策。直接決策也會核對 Native 的 committed、actor、world minute、decision ID。
+- 對帳不再重設世界 `savedAt`。Native 已經提交認知回合、而米花未記帳時，橋接可根據上游正式回合歷史恢復同一決策，避免再次選擇。
+- `reconciliationHooks` 及 `recoveryHooks` 為只供本地測試注入的斷點。單元測試覆蓋 Native 前中斷、Native ACK 與 World 標記之間中斷、Native turn 提交後中斷、回執篡改、多角色錯誤隔離、舊紀錄與遺失收據的對帳檢測；GitHub 上游測試另用固定版真正 wRITE 驗證 Phase76 receipt 不會因重試變成兩段記憶。
+
+限制：上述為**單一可信 localhost Node 程序、兩個可持久化儲存層**的可重試一致性機制，並非跨伺服器 ACID 分散式交易。沒有多程序/多主機共享鎖、身分登入、正式備份復原、收據加密簽署，以及通用長期學習的驗證，不能直接開放公網。

@@ -26,7 +26,7 @@ export function createBrainServer({root=resolve('dist'),bridge=null,worldStore=n
    for await(const chunk of req){size+=chunk.length;if(size>cap)throw Object.assign(new Error('請求內容過大'),{code:'REQUEST_TOO_LARGE',status:413});chunks.push(chunk);}
    try{return JSON.parse(Buffer.concat(chunks).toString('utf8'));}catch{throw Object.assign(new Error('JSON 無法解析'),{code:'INVALID_JSON',status:400});}
   };
-  if(url.pathname==='/api/worlds'||url.pathname==='/api/worlds/migrate'||/^\/api\/worlds\/[a-zA-Z0-9_-]{8,128}(?:\/(?:commands|brain-turn|reconcile))?$/.test(url.pathname)){
+  if(url.pathname==='/api/worlds'||url.pathname==='/api/worlds/migrate'||/^\/api\/worlds\/[a-zA-Z0-9_-]{8,128}(?:\/(?:commands|brain-turn|reconcile|reconciliation-status))?$/.test(url.pathname)){
    if(!worldStore)return json(503,{error:'WORLD_SERVER_NOT_CONFIGURED'});
    if(!sameOrigin())return json(403,{error:'CROSS_ORIGIN_FORBIDDEN'});
    const segments=url.pathname.split('/').filter(Boolean);
@@ -41,6 +41,8 @@ export function createBrainServer({root=resolve('dist'),bridge=null,worldStore=n
      return json(201,await worldStore.migrate(data?.world));
     }
     if(segments.length===3&&req.method==='GET')return json(200,await worldStore.get(segments[2]));
+    if(segments.length===4&&segments[3]==='reconciliation-status'&&req.method==='GET')
+     return json(200,await worldStore.auditReconciliation(segments[2]));
     if(segments.length===4&&req.method==='POST'){
      const data=await bodyJson(20000);
      let result;
